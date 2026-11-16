@@ -13,7 +13,6 @@ extern bool RMNoBad;           // 官方 NoBad：Bad 不扣血 / 不中断
 extern bool RMFreeHold;        // 官方 FreeHold：长条自由松手
 extern bool RMLockHP;          // 锁血：保持满血
 extern bool RMUnlockAllSongs;  // 全曲解锁（本地）
-extern bool RMBlockUpload;     // 离线：阻断成绩服务器连接
 
 // 最近一次判定帧（用于判断是否在游玩中）
 extern volatile double RMLastGameplayTick;
@@ -30,7 +29,7 @@ extern volatile int RMLastLevelIdCount;
 extern volatile bool RMIl2CppReady;
 extern volatile bool RMUnlockAllApplied;
 extern volatile bool RMInLevel;
-extern volatile int RMUploadBlocked;
+extern volatile bool RMGameReady;
 
 void RMLog(NSString *fmt, ...);
 void RMLogInstallCrashHandler(void);

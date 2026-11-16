@@ -10,7 +10,6 @@
 //    Normal/Challenge _noBad                           无 Bad
 //    ModsControl.<AutoPlay/NoBad/FreeHold>             官方 Mod 状态（用于结算标记）
 //    PaymentService.ownedTracks / vipTracks            全曲本地解锁
-//    getaddrinfo() 拦截 rizserver.pigeongames.net      离线模式（成绩不上传）
 //
 
 #import "RMCommon.h"
@@ -41,7 +40,6 @@ bool RMNoBad = false;
 bool RMFreeHold = false;
 bool RMLockHP = false;
 bool RMUnlockAllSongs = false;
-bool RMBlockUpload = false;
 
 volatile double RMLastGameplayTick = 0;
 bool RMBallVisible = true;
@@ -54,7 +52,7 @@ volatile int RMLastLevelIdCount = -1;
 volatile bool RMIl2CppReady = false;
 volatile bool RMUnlockAllApplied = false;
 volatile bool RMInLevel = false;
-volatile int RMUploadBlocked = 0;
+volatile bool RMGameReady = false;
 
 // 关键字段偏移（2.7.1 Il2CppDumper，UUID 41d3a6b76c0d3f01a6cb0ddd615f3156）
 static const size_t kOff_Info_NoteJudge       = 0x58;
@@ -308,7 +306,6 @@ static Il2CppDomain *(*il2cpp_thread_attach)(Il2CppDomain *);
 static Il2CppString *(*il2cpp_string_new)(const char *);
 static Il2CppType *(*il2cpp_class_get_type)(Il2CppClass *);
 static Il2CppObject *(*il2cpp_type_get_object)(const Il2CppType *);
-static void (*il2cpp_runtime_class_init)(Il2CppClass *);
 static uint32_t (*il2cpp_gchandle_new)(Il2CppObject *, bool);
 static void (*il2cpp_gchandle_free)(uint32_t);
 
@@ -333,7 +330,6 @@ static bool rm_resolve_il2cpp(void) {
     RESOLVE(il2cpp_string_new, "il2cpp_string_new");
     il2cpp_class_get_type = (__typeof__(il2cpp_class_get_type))dlsym(h, "il2cpp_class_get_type");
     il2cpp_type_get_object = (__typeof__(il2cpp_type_get_object))dlsym(h, "il2cpp_type_get_object");
-    il2cpp_runtime_class_init = (__typeof__(il2cpp_runtime_class_init))dlsym(h, "il2cpp_runtime_class_init");
     il2cpp_gchandle_new = (__typeof__(il2cpp_gchandle_new))dlsym(h, "il2cpp_gchandle_new");
     il2cpp_gchandle_free = (__typeof__(il2cpp_gchandle_free))dlsym(h, "il2cpp_gchandle_free");
 #undef RESOLVE
@@ -415,10 +411,6 @@ static void rm_setup_classes(void) {
     gSelectClass = rm_find_class_any("LevelSelectControl");
     gObjectClass = rm_find_class_ns("UnityEngine", "Object");
 
-    if (il2cpp_runtime_class_init && gPaymentClass) {
-        il2cpp_runtime_class_init(gPaymentClass);
-    }
-
     if (gObjectClass) {
         gFindTypeM2 = il2cpp_class_get_method_from_name(gObjectClass, "FindObjectOfType", 2);
         if (!gFindTypeM2) {
@@ -477,6 +469,11 @@ static void rm_refresh_objects(void) {
     gWeeklyObj = rm_find_object(gWeeklyClass, &gWeeklyHandle);
     gLevelCtlObj = rm_find_object(gLevelCtlClass, &gLevelCtlHandle);
     gSelectObj = rm_find_object(gSelectClass, &gSelectHandle);
+
+    if (!RMGameReady && (gSelectObj || gInfoObj)) {
+        RMGameReady = true;
+        RMLog(@"游戏界面已就绪，开始应用 Mod 设置");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -719,39 +716,10 @@ static void rm_apply_unlock(void) {
 }
 
 // ---------------------------------------------------------------------------
-// 离线模式：拦截 rizserver.pigeongames.net 的 DNS 解析
-// ---------------------------------------------------------------------------
-static int (*gRealGetaddrinfo)(const char *, const char *, const struct addrinfo *, struct addrinfo **) = NULL;
-
-static int rm_getaddrinfo(const char *node, const char *service,
-                          const struct addrinfo *hints, struct addrinfo **res) {
-    if (RMBlockUpload && node && strstr(node, "rizserver.pigeongames.net")) {
-        RMUploadBlocked = RMUploadBlocked + 1;
-        RMLog(@"离线模式已拦截成绩服务器: %s", node);
-        return EAI_NONAME;
-    }
-    if (!gRealGetaddrinfo) {
-        gRealGetaddrinfo = (__typeof__(gRealGetaddrinfo))dlsym(RTLD_DEFAULT, "getaddrinfo");
-    }
-    if (!gRealGetaddrinfo) return EAI_FAIL;
-    return gRealGetaddrinfo(node, service, hints, res);
-}
-
-#define RM_DYLD_INTERPOSE(_replacement, _replacee)                                      \
-    __attribute__((used)) static struct {                                               \
-        const void *replacement;                                                        \
-        const void *replacee;                                                           \
-    } _interpose_##_replacee __attribute__((section("__DATA,__interpose"))) = {         \
-        (const void *)(unsigned long)&_replacement,                                     \
-        (const void *)(unsigned long)&_replacee};
-
-RM_DYLD_INTERPOSE(rm_getaddrinfo, getaddrinfo)
-
-// ---------------------------------------------------------------------------
 // 对外接口
 // ---------------------------------------------------------------------------
 void RMApplySettingsNow(void) {
-    if (!RMIl2CppReady) return;
+    if (!RMIl2CppReady || !RMGameReady) return;
     rm_apply_mods();
     if (RMUnlockAllSongs) rm_apply_unlock();
 }
@@ -772,6 +740,8 @@ static void rm_runtime_tick(void) {
         gLastFind = now;
         rm_refresh_objects();
     }
+
+    if (!RMGameReady) return;
 
     rm_pin_life_fast();
 

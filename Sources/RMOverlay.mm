@@ -13,7 +13,6 @@ typedef NS_ENUM(NSInteger, RMRowTag) {
     RMRowFreeHold,
     RMRowLockHP,
     RMRowUnlockAll,
-    RMRowBlockUpload,
     RMRowBallShow,
     RMRowAutoHide,
 };
@@ -389,7 +388,7 @@ static UIWindowScene *rm_active_scene(void) {
 
     UILabel *tip = [[UILabel alloc] initWithFrame:CGRectMake(22, _y, self.view.bounds.size.width - 44, 46)];
     tip.text = @"自动打歌开启后，本局会被游戏标记为 Mod 游玩，不计入排行。"
-               @"周赛 / 挑战模式如需完全避免成绩上传，请同时开启「离线模式」。";
+               @"周赛 / 挑战模式的成绩仍可能上传，建议只在普通模式使用。";
     tip.font = [UIFont systemFontOfSize:11];
     tip.textColor = [UIColor colorWithWhite:1 alpha:0.4];
     tip.numberOfLines = 2;
@@ -397,7 +396,7 @@ static UIWindowScene *rm_active_scene(void) {
     _y += 52;
 }
 
-// ------------------------------ 解锁 / 网络 ------------------------------
+// ------------------------------ 解锁 ------------------------------
 - (void)buildUnlock {
     [self section:@"本地解锁（不写存档 / 不上传）"];
     [self toggleRow:@"全曲解锁" detail:@"把全部曲目写入 PaymentService.ownedTracks"
@@ -410,20 +409,6 @@ static UIWindowScene *rm_active_scene(void) {
     tip.textColor = [UIColor colorWithWhite:1 alpha:0.4];
     tip.numberOfLines = 2;
     [_scroll addSubview:tip];
-    _y += 52;
-
-    [self section:@"网络"];
-    [self toggleRow:@"离线模式（阻断成绩服务器）"
-              detail:@"拦截 rizserver.pigeongames.net 的 DNS 解析，成绩无法上传"
-                 tag:RMRowBlockUpload on:RMBlockUpload];
-
-    UILabel *tip2 = [[UILabel alloc] initWithFrame:CGRectMake(22, _y, self.view.bounds.size.width - 44, 46)];
-    tip2.text = @"开启后游戏会表现为离线：登录、同步、排行榜均不可用，仅适合纯单机游玩。"
-                @"关闭后需要重启游戏才能恢复全部联网功能。";
-    tip2.font = [UIFont systemFontOfSize:11];
-    tip2.textColor = [UIColor colorWithWhite:1 alpha:0.4];
-    tip2.numberOfLines = 2;
-    [_scroll addSubview:tip2];
     _y += 52;
 }
 
@@ -569,7 +554,6 @@ static UIWindowScene *rm_active_scene(void) {
         case RMRowFreeHold: RMFreeHold = on; break;
         case RMRowLockHP: RMLockHP = on; break;
         case RMRowUnlockAll: RMUnlockAllSongs = on; break;
-        case RMRowBlockUpload: RMBlockUpload = on; break;
         case RMRowAutoHide:
             RMAutoHideInGame = on;
             RMUpdateBall();
@@ -609,7 +593,6 @@ static UIWindowScene *rm_active_scene(void) {
     [d setBool:RMFreeHold forKey:@"rm.freehold"];
     [d setBool:RMLockHP forKey:@"rm.hp"];
     [d setBool:RMUnlockAllSongs forKey:@"rm.unlock"];
-    [d setBool:RMBlockUpload forKey:@"rm.block"];
     [d setBool:RMBallVisible forKey:@"rm.ball.show"];
     [d setBool:RMAutoHideInGame forKey:@"rm.ball.auto"];
     [d setFloat:RMBallAlpha forKey:@"rm.ball.alpha"];
@@ -620,13 +603,13 @@ static UIWindowScene *rm_active_scene(void) {
     if (!gStatusLabel) return;
     gStatusLabel.text = [NSString stringWithFormat:
         @"模式: 反射轮询（不改代码页）   il2cpp: %@\n"
-        @"游玩中: %@   音符: %d   曲目: %d\n"
-        @"全曲解锁: %@   已拦截连接: %d",
+        @"游戏界面: %@   游玩中: %@\n"
+        @"音符: %d   曲目: %d   全曲解锁: %@",
         RMIl2CppReady ? @"OK" : @"N/A",
+        RMGameReady ? @"已就绪" : @"未就绪",
         RMInLevel ? @"是" : @"否",
         RMLastNoteCount, RMLastLevelIdCount,
-        RMUnlockAllApplied ? @"已应用" : @"未应用",
-        RMUploadBlocked];
+        RMUnlockAllApplied ? @"已应用" : @"未应用"];
 }
 
 - (void)onShowLog {

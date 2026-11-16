@@ -19,15 +19,14 @@ static void RMBootstrap(void) {
     RMFreeHold       = [d boolForKey:@"rm.freehold"];
     RMLockHP         = [d boolForKey:@"rm.hp"];
     RMUnlockAllSongs = [d boolForKey:@"rm.unlock"];
-    RMBlockUpload    = [d boolForKey:@"rm.block"];
     RMBallVisible    = [d objectForKey:@"rm.ball.show"] ? [d boolForKey:@"rm.ball.show"] : YES;
     RMAutoHideInGame = [d objectForKey:@"rm.ball.auto"] ? [d boolForKey:@"rm.ball.auto"] : YES;
     RMBallAlpha      = [d objectForKey:@"rm.ball.alpha"] ? [d floatForKey:@"rm.ball.alpha"] : 0.85f;
     RMBallSize       = [d objectForKey:@"rm.ball.size"] ? [d floatForKey:@"rm.ball.size"] : 56.0f;
     if (RMBallSize < 40.0f || RMBallSize > 96.0f) RMBallSize = 56.0f;
 
-    RMLog(@"dylib 已加载（2.7.1 基线），autoplay=%d nobad=%d freehold=%d hp=%d unlock=%d block=%d",
-          RMAutoPlay, RMNoBad, RMFreeHold, RMLockHP, RMUnlockAllSongs, RMBlockUpload);
+    RMLog(@"dylib 已加载（2.7.1 基线），autoplay=%d nobad=%d freehold=%d hp=%d unlock=%d",
+          RMAutoPlay, RMNoBad, RMFreeHold, RMLockHP, RMUnlockAllSongs);
 
     dispatch_async(dispatch_get_main_queue(), ^{
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)),
