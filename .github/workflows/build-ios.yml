@@ -1,0 +1,31 @@
+name: Build RizlineMod framework
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: Build framework
+        run: |
+          chmod +x build_unsigned.sh
+          bash build_unsigned.sh
+
+      - name: Verify binary
+        run: |
+          file build/RizlineMod.framework/RizlineMod
+          otool -L build/RizlineMod.framework/RizlineMod
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RizlineMod.framework
+          path: build/RizlineMod.framework
