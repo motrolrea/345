@@ -379,6 +379,7 @@ static Il2CppClass *gObjectClass = NULL;
 
 static const MethodInfo *gFindTypeM2 = NULL;
 static const MethodInfo *gFindTypeM1 = NULL;
+static const MethodInfo *gFindObjectsM1 = NULL;
 
 static void *gInfoObj = NULL;
 static uint32_t gInfoHandle = 0;
@@ -416,6 +417,7 @@ static void rm_setup_classes(void) {
         if (!gFindTypeM2) {
             gFindTypeM1 = il2cpp_class_get_method_from_name(gObjectClass, "FindObjectOfType", 1);
         }
+        gFindObjectsM1 = il2cpp_class_get_method_from_name(gObjectClass, "FindObjectsOfType", 1);
     }
     int mask = (gInfoClass ? 1 : 0) | (gJudgeClass ? 2 : 0) | (gNormalClass ? 4 : 0) |
                (gChallengeClass ? 8 : 0) | (gWeeklyClass ? 16 : 0) | (gLevelCtlClass ? 32 : 0) |
@@ -474,6 +476,129 @@ static void rm_refresh_objects(void) {
         RMGameReady = true;
         RMLog(@"游戏界面已就绪，开始应用 Mod 设置");
     }
+}
+
+// ---------------------------------------------------------------------------
+// 诊断：抓取屏幕上的 Unity / UIKit 文本（用于定位 SDK 报错原文）
+// ---------------------------------------------------------------------------
+static NSString *rm_il2cpp_string_text(Il2CppString *s) {
+    if (!s) return nil;
+    int32_t len = *(int32_t *)((char *)s + 0x10);
+    if (len <= 0 || len > 2048) return nil;
+    const uint16_t *chars = (const uint16_t *)((char *)s + 0x14);
+    NSString *txt = [[NSString alloc] initWithBytes:chars
+                                             length:(NSUInteger)len * 2
+                                           encoding:NSUTF16LittleEndianStringEncoding];
+    if (!txt) {
+        txt = [[NSString alloc] initWithBytes:chars
+                                       length:(NSUInteger)len * 2
+                                     encoding:NSUTF16BigEndianStringEncoding];
+    }
+    return txt;
+}
+
+static NSUInteger rm_array_count(void *arr) {
+    if (!arr) return 0;
+    return (NSUInteger)*(uintptr_t *)((char *)arr + 0x18);
+}
+
+static NSString *gLastUiDump = nil;
+
+static void rm_scan_unity_texts(void) {
+    if (!gFindObjectsM1 || !il2cpp_class_get_type || !il2cpp_type_get_object) return;
+
+    NSMutableArray<NSString *> *texts = [NSMutableArray array];
+    NSMutableSet<NSString *> *seen = [NSMutableSet set];
+    NSMutableString *stats = [NSMutableString string];
+
+    const char *nss[3] = {"TMPro", "TMPro", "UnityEngine.UI"};
+    const char *names[3] = {"TextMeshProUGUI", "TextMeshPro", "Text"};
+    for (int ci = 0; ci < 3; ci++) {
+        Il2CppClass *k = rm_find_class_ns(nss[ci], names[ci]);
+        if (!k) { [stats appendFormat:@"%s=缺失 ", names[ci]]; continue; }
+        Il2CppType *t = il2cpp_class_get_type(k);
+        void *typeObj = t ? il2cpp_type_get_object(t) : NULL;
+        if (!typeObj) { [stats appendFormat:@"%s=无类型 ", names[ci]]; continue; }
+
+        Il2CppException *exc = NULL;
+        void *args[1] = {typeObj};
+        Il2CppObject *arr = il2cpp_runtime_invoke(gFindObjectsM1, NULL, args, &exc);
+        if (exc || !arr) { [stats appendFormat:@"%s=异常 ", names[ci]]; continue; }
+
+        NSUInteger n = rm_array_count(arr);
+        if (n > 1024) n = 1024;
+        [stats appendFormat:@"%s=%lu ", names[ci], (unsigned long)n];
+
+        const MethodInfo *baseGet = il2cpp_class_get_method_from_name(k, "get_text", 0);
+        void **elems = (void **)((char *)arr + kOff_Array_Elements);
+        for (NSUInteger i = 0; i < n; i++) {
+            Il2CppObject *o = (Il2CppObject *)elems[i];
+            if (!o) continue;
+            const MethodInfo *m = baseGet;
+            if (!m) {
+                Il2CppClass *oc = il2cpp_object_get_class(o);
+                m = oc ? il2cpp_class_get_method_from_name(oc, "get_text", 0) : NULL;
+            }
+            if (!m) continue;
+            Il2CppException *e2 = NULL;
+            Il2CppObject *str = il2cpp_runtime_invoke(m, o, NULL, &e2);
+            if (e2 || !str) continue;
+            NSString *txt = rm_il2cpp_string_text((Il2CppString *)str);
+            txt = [txt stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            if (txt.length < 2 || txt.length > 300) continue;
+            if ([seen containsObject:txt]) continue;
+            [seen addObject:txt];
+            [texts addObject:txt];
+            if (texts.count >= 60) break;
+        }
+        if (texts.count >= 60) break;
+    }
+
+    NSString *joined = texts.count ? [texts componentsJoinedByString:@" ⏐ "] : @"(无文本)";
+    NSString *sig = [NSString stringWithFormat:@"%@→ %@", stats, joined];
+    if (gLastUiDump && [sig isEqualToString:gLastUiDump]) return;
+    gLastUiDump = sig;
+    RMLog(@"界面文本[Unity] %@", sig);
+}
+
+static NSString *gLastUIKitDump = nil;
+
+static void rm_collect_uikit_texts(UIView *v, NSMutableArray<NSString *> *out) {
+    if (!v || v.hidden || v.alpha < 0.02) return;
+    NSString *t = nil;
+    if ([v isKindOfClass:[UILabel class]]) {
+        t = ((UILabel *)v).text;
+    } else if ([v isKindOfClass:[UIButton class]]) {
+        t = [(UIButton *)v titleForState:UIControlStateNormal];
+    } else if ([v isKindOfClass:[UITextField class]]) {
+        t = ((UITextField *)v).text;
+    } else if ([v isKindOfClass:[UITextView class]]) {
+        t = ((UITextView *)v).text;
+    }
+    if (t.length >= 2 && t.length <= 300) [out addObject:t];
+    for (UIView *s in v.subviews) rm_collect_uikit_texts(s, out);
+}
+
+static void rm_scan_uikit_texts(void) {
+    NSMutableArray<NSString *> *texts = [NSMutableArray array];
+    NSMutableSet<NSString *> *seen = [NSMutableSet set];
+    for (UIScene *s in UIApplication.sharedApplication.connectedScenes) {
+        if (![s isKindOfClass:[UIWindowScene class]]) continue;
+        for (UIWindow *w in ((UIWindowScene *)s).windows) {
+            // 跳过本 mod 自己的悬浮球 / 设置页
+            if (w.windowLevel >= UIWindowLevelAlert) continue;
+            rm_collect_uikit_texts(w, texts);
+        }
+    }
+    for (NSString *t in texts) {
+        if (t.length) [seen addObject:t];
+    }
+    if (!seen.count) return;
+    NSArray *sorted = [[seen allObjects] sortedArrayUsingSelector:@selector(compare:)];
+    NSString *joined = [sorted componentsJoinedByString:@" ⏐ "];
+    if (gLastUIKitDump && [joined isEqualToString:gLastUIKitDump]) return;
+    gLastUIKitDump = joined;
+    RMLog(@"界面文本[UIKit] %@", joined);
 }
 
 // ---------------------------------------------------------------------------
@@ -724,9 +849,14 @@ void RMApplySettingsNow(void) {
     if (RMUnlockAllSongs) rm_apply_unlock();
 }
 
+static CFTimeInterval gStartTime = 0;
+static CFTimeInterval gLastUiScan = 0;
+static BOOL gLoggedNoGameReady = NO;
+
 static void rm_runtime_tick(void) {
     if (!RMIl2CppReady) return;
     CFTimeInterval now = CFAbsoluteTimeGetCurrent();
+    if (gStartTime == 0) gStartTime = now;
 
     if (!gInfoClass || !gJudgeClass || (!gFindTypeM2 && !gFindTypeM1)) {
         if (now - gLastResolve > 2.0) {
@@ -739,6 +869,18 @@ static void rm_runtime_tick(void) {
     if (now - gLastFind > 0.5) {
         gLastFind = now;
         rm_refresh_objects();
+    }
+
+    // 诊断：抓屏幕文本，定位 SDK / 登录报错原文
+    CFTimeInterval scanInterval = RMGameReady ? 30.0 : 5.0;
+    if (now - gLastUiScan > scanInterval) {
+        gLastUiScan = now;
+        rm_scan_unity_texts();
+        rm_scan_uikit_texts();
+        if (!RMGameReady && !gLoggedNoGameReady && now - gStartTime > 20.0) {
+            gLoggedNoGameReady = YES;
+            RMLog(@"启动 %.0f 秒仍未检测到游戏主界面；若停在报错页，请把上面的界面文本发我", now - gStartTime);
+        }
     }
 
     if (!RMGameReady) return;
