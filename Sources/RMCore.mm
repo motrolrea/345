@@ -75,6 +75,10 @@ static const size_t kOff_List_Items   = 0x10;
 static const size_t kOff_List_Size    = 0x18;
 static const size_t kOff_Array_Elements = 0x20;
 static const size_t kOff_Boxed_Value  = 0x10;
+static const size_t kOff_User_Items   = 0x58;   // User.getItems
+static const size_t kOff_User_Levels  = 0x70;   // User.unlockedLevels
+static const size_t kOff_Item_AssetId = 0x10;   // OwnedItemInfo.itemAssetId
+static const size_t kOff_Item_Amount  = 0x18;   // OwnedItemInfo.amount
 
 static void **rm_list_items(void *list, int *outSize) {
     if (!list) return NULL;
@@ -289,6 +293,7 @@ typedef struct Il2CppObject Il2CppObject;
 typedef struct Il2CppString Il2CppString;
 typedef struct Il2CppType Il2CppType;
 typedef struct Il2CppException Il2CppException;
+typedef struct Il2CppArray Il2CppArray;
 typedef struct FieldInfo FieldInfo;
 typedef struct MethodInfo MethodInfo;
 
@@ -308,6 +313,8 @@ static Il2CppType *(*il2cpp_class_get_type)(Il2CppClass *);
 static Il2CppObject *(*il2cpp_type_get_object)(const Il2CppType *);
 static uint32_t (*il2cpp_gchandle_new)(Il2CppObject *, bool);
 static void (*il2cpp_gchandle_free)(uint32_t);
+static void *(*il2cpp_object_new)(Il2CppClass *);
+static Il2CppArray *(*il2cpp_array_new)(Il2CppClass *, size_t);
 
 static bool rm_resolve_il2cpp(void) {
     if (RMIl2CppReady) return true;
@@ -332,6 +339,8 @@ static bool rm_resolve_il2cpp(void) {
     il2cpp_type_get_object = (__typeof__(il2cpp_type_get_object))dlsym(h, "il2cpp_type_get_object");
     il2cpp_gchandle_new = (__typeof__(il2cpp_gchandle_new))dlsym(h, "il2cpp_gchandle_new");
     il2cpp_gchandle_free = (__typeof__(il2cpp_gchandle_free))dlsym(h, "il2cpp_gchandle_free");
+    il2cpp_object_new = (__typeof__(il2cpp_object_new))dlsym(h, "il2cpp_object_new");
+    il2cpp_array_new = (__typeof__(il2cpp_array_new))dlsym(h, "il2cpp_array_new");
 #undef RESOLVE
     RMIl2CppReady = true;
     return true;
@@ -376,6 +385,8 @@ static Il2CppClass *gPaymentClass = NULL;
 static Il2CppClass *gModsClass = NULL;
 static Il2CppClass *gSelectClass = NULL;
 static Il2CppClass *gObjectClass = NULL;
+static Il2CppClass *gOwnedItemClass = NULL;
+static Il2CppClass *gStringClass = NULL;
 
 static const MethodInfo *gFindTypeM2 = NULL;
 static const MethodInfo *gFindTypeM1 = NULL;
@@ -411,6 +422,8 @@ static void rm_setup_classes(void) {
     gModsClass = rm_find_class_any("ModsControl");
     gSelectClass = rm_find_class_any("LevelSelectControl");
     gObjectClass = rm_find_class_ns("UnityEngine", "Object");
+    gOwnedItemClass = rm_find_class_any("OwnedItemInfo");
+    gStringClass = rm_find_class_ns("System", "String");
 
     if (gObjectClass) {
         gFindTypeM2 = il2cpp_class_get_method_from_name(gObjectClass, "FindObjectOfType", 2);
@@ -638,6 +651,62 @@ static bool rm_boxed_bool(Il2CppObject *o) {
     return *(uint8_t *)((char *)o + kOff_Boxed_Value) != 0;
 }
 
+static int rm_boxed_int(Il2CppObject *o) {
+    if (!o) return 0;
+    return *(int *)((char *)o + kOff_Boxed_Value);
+}
+
+static BOOL rm_istring_equal(Il2CppString *a, Il2CppString *b) {
+    if (a == b) return YES;
+    if (!a || !b) return NO;
+    int la = *(int *)((char *)a + 0x10);
+    int lb = *(int *)((char *)b + 0x10);
+    if (la != lb || la < 0) return NO;
+    return memcmp((char *)a + 0x14, (char *)b + 0x14, (size_t)la * 2) == 0;
+}
+
+static Il2CppObject *rm_call_obj0(void *obj, const char *method) {
+    if (!obj) return NULL;
+    Il2CppClass *k = il2cpp_object_get_class((Il2CppObject *)obj);
+    if (!k) return NULL;
+    const MethodInfo *m = il2cpp_class_get_method_from_name(k, method, 0);
+    if (!m) return NULL;
+    Il2CppException *exc = NULL;
+    Il2CppObject *r = il2cpp_runtime_invoke(m, obj, NULL, &exc);
+    return exc ? NULL : r;
+}
+
+static int rm_call_int0(void *obj, const char *method) {
+    return rm_boxed_int(rm_call_obj0(obj, method));
+}
+
+// user.getItems 里是否已有该 itemAssetId
+static bool rm_owned_has(void *items, Il2CppString *assetId) {
+    int n = 0;
+    void **elems = rm_list_items(items, &n);
+    if (!elems) return false;
+    for (int i = 0; i < n; i++) {
+        void *it = elems[i];
+        if (!it) continue;
+        if (rm_istring_equal(*(Il2CppString **)((char *)it + kOff_Item_AssetId), assetId)) return true;
+    }
+    return false;
+}
+
+static bool rm_owned_add(void *items, Il2CppString *assetId) {
+    if (!items || !assetId || !gOwnedItemClass || !il2cpp_object_new) return false;
+    Il2CppObject *it = (Il2CppObject *)il2cpp_object_new(gOwnedItemClass);
+    if (!it) return false;
+    *(Il2CppString **)((char *)it + kOff_Item_AssetId) = assetId;
+    *(int *)((char *)it + kOff_Item_Amount) = 1;
+    const MethodInfo *m = il2cpp_class_get_method_from_name(il2cpp_object_get_class((Il2CppObject *)items), "Add", 1);
+    if (!m) return false;
+    Il2CppException *exc = NULL;
+    void *args[1] = {it};
+    il2cpp_runtime_invoke(m, items, args, &exc);
+    return exc == NULL;
+}
+
 static bool rm_list_contains(void *list, Il2CppString *value) {
     if (!list || !value) return false;
     Il2CppClass *k = il2cpp_object_get_class((Il2CppObject *)list);
@@ -759,8 +828,60 @@ static void rm_pin_life_fast(void) {
 }
 
 // ---------------------------------------------------------------------------
-// 全曲解锁：把 LevelControl 的所有 id 塞进 PaymentService.ownedTracks
+// 全曲解锁
+//   TrackUnlocked(trackId) 的实际实现是 user.getItems.Any(i => i.itemAssetId == trackId)，
+//   所以要写 User.getItems（OwnedItemInfo），只写 PaymentService.ownedTracks 没用。
+//   trackAssetId 从 PaymentService.GetSongProductMap() 的 key 取。
 // ---------------------------------------------------------------------------
+static Il2CppObject *rm_payment_user(void) {
+    if (!gPaymentClass || !il2cpp_class_get_field_from_name) return NULL;
+    FieldInfo *f = il2cpp_class_get_field_from_name(gPaymentClass, "user");
+    if (!f) return NULL;
+    void *user = NULL;
+    il2cpp_field_static_get_value(f, &user);
+    return (Il2CppObject *)user;
+}
+
+static int rm_collect_track_ids(Il2CppObject ***outIDs, int *outCount) {
+    *outIDs = NULL;
+    *outCount = 0;
+    if (!gPaymentClass || !gStringClass || !il2cpp_array_new) return 0;
+    const MethodInfo *mMap = il2cpp_class_get_method_from_name(gPaymentClass, "GetSongProductMap", 0);
+    if (!mMap) return 0;
+    Il2CppException *exc = NULL;
+    Il2CppObject *map = il2cpp_runtime_invoke(mMap, NULL, NULL, &exc);
+    if (!map || exc) return 0;
+
+    Il2CppObject *keys = rm_call_obj0(map, "get_Keys");
+    int kn = rm_call_int0(keys, "get_Count");
+    if (!keys || kn <= 0 || kn > 5000) return 0;
+
+    Il2CppArray *arr = il2cpp_array_new(gStringClass, (size_t)kn);
+    if (!arr) return 0;
+    const MethodInfo *mCopy = il2cpp_class_get_method_from_name(
+        il2cpp_object_get_class(keys), "CopyTo", 2);
+    if (!mCopy) return 0;
+    int zero = 0;
+    void *args[2] = {arr, &zero};
+    Il2CppException *exc2 = NULL;
+    il2cpp_runtime_invoke(mCopy, keys, args, &exc2);
+    if (exc2) return 0;
+
+    *outIDs = (Il2CppObject **)((char *)arr + kOff_Array_Elements);
+    *outCount = kn;
+    return kn;
+}
+
+static bool rm_track_unlocked(Il2CppString *trackId) {
+    if (!gPaymentClass || !trackId) return false;
+    const MethodInfo *m = il2cpp_class_get_method_from_name(gPaymentClass, "TrackUnlocked", 1);
+    if (!m) return false;
+    void *args[1] = {trackId};
+    Il2CppException *exc = NULL;
+    Il2CppObject *r = il2cpp_runtime_invoke(m, NULL, args, &exc);
+    return !exc && rm_boxed_bool(r);
+}
+
 static void rm_apply_unlock(void) {
     if (!RMUnlockAllSongs) {
         RMUnlockAllApplied = false;
@@ -780,8 +901,7 @@ static void rm_apply_unlock(void) {
 
     int count = 0;
     void **items = rm_list_items(ids, &count);
-    if (!items || count <= 0) return;
-    if (count > 20000) return;
+    if (!items || count <= 0 || count > 20000) return;
 
     FieldInfo *fTracks = il2cpp_class_get_field_from_name(gPaymentClass, "ownedTracks");
     if (!fTracks) return;
@@ -797,6 +917,30 @@ static void rm_apply_unlock(void) {
     void *vip = NULL;
     if (fVip) il2cpp_field_static_get_value(fVip, &vip);
 
+    Il2CppObject *user = rm_payment_user();
+    void *userItems = user ? *(void **)((char *)user + kOff_User_Items) : NULL;
+    void *userLevels = user ? *(void **)((char *)user + kOff_User_Levels) : NULL;
+
+    // 1) 曲目资源 id（getItems 真正比对的值）
+    Il2CppObject **trackIDs = NULL;
+    int trackCount = 0;
+    rm_collect_track_ids(&trackIDs, &trackCount);
+    int itemAdded = 0;
+    int trackAdded = 0;
+    for (int i = 0; i < trackCount; i++) {
+        Il2CppString *tid = (Il2CppString *)trackIDs[i];
+        if (!tid) continue;
+        if (userItems && !rm_owned_has(userItems, tid)) {
+            if (rm_owned_add(userItems, tid)) itemAdded++;
+        }
+        if (!rm_list_contains(owned, tid)) {
+            rm_list_add(owned, tid);
+            trackAdded++;
+        }
+        if (vip) rm_hashset_add(vip, tid);
+    }
+
+    // 2) 关卡 id（ownedTracks / unlockedLevels，兜底）
     int added = 0;
     for (int i = 0; i < count; i++) {
         Il2CppString *sid = (Il2CppString *)items[i];
@@ -806,6 +950,11 @@ static void rm_apply_unlock(void) {
             added++;
         }
         if (vip) rm_hashset_add(vip, sid);
+        if (userLevels && !rm_list_contains(userLevels, sid)) rm_list_add(userLevels, sid);
+        // 商品表拿不到时，退化用关卡 id 直接补 item
+        if (trackCount == 0 && userItems && !rm_owned_has(userItems, sid)) {
+            if (rm_owned_add(userItems, sid)) itemAdded++;
+        }
     }
 
     // DiscO 关卡在独立的 map 里，单独补一遍
@@ -826,6 +975,7 @@ static void rm_apply_unlock(void) {
                     added++;
                 }
                 if (vip) rm_hashset_add(vip, sid);
+                if (userLevels && !rm_list_contains(userLevels, sid)) rm_list_add(userLevels, sid);
             }
             count += discCount;
         }
@@ -833,8 +983,15 @@ static void rm_apply_unlock(void) {
 
     RMLastLevelIdCount = count;
     RMUnlockAllApplied = true;
-    if (added > 0) {
-        RMLog(@"全曲解锁: 新增 %d / 共 %d 首", added, count);
+    if (added + trackAdded + itemAdded > 0) {
+        static BOOL verified = NO;
+        bool ok = false;
+        if (!verified && trackCount > 0 && trackIDs[0]) {
+            verified = YES;
+            ok = rm_track_unlocked((Il2CppString *)trackIDs[0]);
+        }
+        RMLog(@"全曲解锁: 关卡 %d，曲目 id %d，新增 item %d / ownedTracks %d（TrackUnlocked 校验=%d）",
+              count, trackCount, itemAdded, trackAdded + added, ok ? 1 : 0);
         // 让选曲界面重新检查一次锁图标
         rm_call_static_void(gSelectClass, "RefreshAllPurchasableLocksGlobal");
     }
@@ -892,7 +1049,7 @@ static void rm_runtime_tick(void) {
         rm_apply_mods();
     }
 
-    if (RMUnlockAllSongs && now - gLastUnlock > 2.0) {
+    if (RMUnlockAllSongs && now - gLastUnlock > 5.0) {
         gLastUnlock = now;
         if (!gLevelCtlObj) rm_refresh_objects();
         rm_apply_unlock();

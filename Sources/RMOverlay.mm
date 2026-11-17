@@ -291,35 +291,55 @@ static UIWindowScene *rm_active_scene(void) {
 @end
 
 @implementation RMSettingsController {
+    UIView *_card;
+    UILabel *_titleLabel;
+    UILabel *_subLabel;
     UIScrollView *_scroll;
     UIButton *_closeButton;
     RMTabBar *_tabBar;
     CGFloat _y;
+    CGFloat _lastBuildWidth;
     NSInteger _tab;
 }
 
 - (BOOL)shouldAutorotate { return NO; }
-- (UIInterfaceOrientationMask)supportedInterfaceOrientations { return UIInterfaceOrientationMaskLandscape; }
-- (UIInterfaceOrientation)preferredInterfaceOrientationForPresentation { return UIInterfaceOrientationLandscapeRight; }
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations { return UIInterfaceOrientationMaskPortrait; }
+- (UIInterfaceOrientation)preferredInterfaceOrientationForPresentation { return UIInterfaceOrientationPortrait; }
 - (UIStatusBarStyle)preferredStatusBarStyle { return UIStatusBarStyleLightContent; }
+
+- (CGFloat)panelWidth {
+    CGFloat w = _card.bounds.size.width;
+    return w > 0 ? w : self.view.bounds.size.width;
+}
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.view.backgroundColor = RMBGColor();
+    self.view.backgroundColor = [UIColor colorWithWhite:0 alpha:0.5];
 
-    UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(20, 14, self.view.bounds.size.width - 90, 28)];
-    title.text = @"RizlineMod";
-    title.font = [UIFont italicSystemFontOfSize:22];
-    title.textColor = UIColor.whiteColor;
-    title.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-    [self.view addSubview:title];
+    _card = [[UIView alloc] initWithFrame:CGRectZero];
+    _card.backgroundColor = RMBGColor();
+    _card.layer.cornerRadius = 18;
+    _card.layer.masksToBounds = YES;
+    _card.layer.borderWidth = 1.0 / UIScreen.mainScreen.scale;
+    _card.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.14].CGColor;
+    [self.view addSubview:_card];
 
-    UILabel *sub = [[UILabel alloc] initWithFrame:CGRectMake(20, 40, self.view.bounds.size.width - 90, 16)];
-    sub.text = @"律动轨迹 2.7.1 · 注入版";
-    sub.font = [UIFont systemFontOfSize:11];
-    sub.textColor = [UIColor colorWithWhite:1 alpha:0.45];
-    sub.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-    [self.view addSubview:sub];
+    UITapGestureRecognizer *backdrop = [[UITapGestureRecognizer alloc] initWithTarget:self
+                                                                              action:@selector(onBackdrop:)];
+    backdrop.cancelsTouchesInView = NO;
+    [self.view addGestureRecognizer:backdrop];
+
+    _titleLabel = [[UILabel alloc] initWithFrame:CGRectMake(20, 14, 200, 28)];
+    _titleLabel.text = @"RizlineMod";
+    _titleLabel.font = [UIFont italicSystemFontOfSize:22];
+    _titleLabel.textColor = UIColor.whiteColor;
+    [_card addSubview:_titleLabel];
+
+    _subLabel = [[UILabel alloc] initWithFrame:CGRectMake(20, 40, 200, 16)];
+    _subLabel.text = @"律动轨迹 2.7.1 · 注入版";
+    _subLabel.font = [UIFont systemFontOfSize:11];
+    _subLabel.textColor = [UIColor colorWithWhite:1 alpha:0.45];
+    [_card addSubview:_subLabel];
 
     _closeButton = [UIButton buttonWithType:UIButtonTypeSystem];
     [_closeButton setTitle:@"✕" forState:UIControlStateNormal];
@@ -327,12 +347,10 @@ static UIWindowScene *rm_active_scene(void) {
     _closeButton.titleLabel.font = [UIFont boldSystemFontOfSize:22];
     _closeButton.backgroundColor = [UIColor colorWithWhite:1 alpha:0.10];
     _closeButton.layer.cornerRadius = 20;
-    _closeButton.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin;
     [_closeButton addTarget:self action:@selector(onClose) forControlEvents:UIControlEventTouchUpInside];
-    [self.view addSubview:_closeButton];
+    [_card addSubview:_closeButton];
 
-    _tabBar = [[RMTabBar alloc] initWithFrame:CGRectMake(16, 66, self.view.bounds.size.width - 32, 40)];
-    _tabBar.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    _tabBar = [[RMTabBar alloc] initWithFrame:CGRectMake(16, 66, 300, 40)];
     __weak RMSettingsController *weakSelf = self;
     _tabBar.onSelect = ^(NSInteger index) {
         RMSettingsController *strongSelf = weakSelf;
@@ -340,23 +358,35 @@ static UIWindowScene *rm_active_scene(void) {
         strongSelf->_tab = index;
         [strongSelf rebuild];
     };
-    [self.view addSubview:_tabBar];
+    [_card addSubview:_tabBar];
 
-    _scroll = [[UIScrollView alloc] initWithFrame:CGRectMake(0, 112, self.view.bounds.size.width, self.view.bounds.size.height - 112)];
-    _scroll.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    _scroll = [[UIScrollView alloc] initWithFrame:CGRectMake(0, 112, 300, 300)];
     _scroll.alwaysBounceVertical = YES;
-    [self.view addSubview:_scroll];
+    [_card addSubview:_scroll];
 
     [self rebuild];
 }
 
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
-    CGFloat w = self.view.bounds.size.width;
-    CGFloat h = self.view.bounds.size.height;
-    _closeButton.frame = CGRectMake(w - 22 - 40, 14, 40, 40);
-    _tabBar.frame = CGRectMake(16, 66, w - 32, 40);
-    _scroll.frame = CGRectMake(0, 112, w, h - 112);
+    CGRect b = self.view.bounds;
+    CGFloat w = MIN(b.size.width - 28, 430);
+    CGFloat h = b.size.height * 0.55;                 // 半屏
+    if (h < 320) h = MIN(b.size.height - 60, 320);
+    _card.frame = CGRectMake((b.size.width - w) / 2, (b.size.height - h) / 2, w, h);
+
+    CGFloat cw = _card.bounds.size.width;
+    CGFloat ch = _card.bounds.size.height;
+    _titleLabel.frame = CGRectMake(20, 14, cw - 90, 28);
+    _subLabel.frame = CGRectMake(20, 40, cw - 90, 16);
+    _closeButton.frame = CGRectMake(cw - 22 - 40, 14, 40, 40);
+    _tabBar.frame = CGRectMake(16, 66, cw - 32, 40);
+    _scroll.frame = CGRectMake(0, 112, cw, ch - 112);
+
+    if (fabs(cw - _lastBuildWidth) > 0.5) {
+        _lastBuildWidth = cw;
+        [self rebuild];
+    }
 }
 
 - (void)rebuild {
@@ -370,7 +400,7 @@ static UIWindowScene *rm_active_scene(void) {
         case 2: [self buildInterface]; break;
         default: [self buildDiagnostics]; break;
     }
-    _scroll.contentSize = CGSizeMake(self.view.bounds.size.width, _y + 24);
+    _scroll.contentSize = CGSizeMake([self panelWidth], _y + 24);
 }
 
 // ------------------------------ 玩法 ------------------------------
@@ -386,7 +416,7 @@ static UIWindowScene *rm_active_scene(void) {
     [self toggleRow:@"锁血" detail:@"每帧把血量压在满血，Miss 也不掉血"
                 tag:RMRowLockHP on:RMLockHP];
 
-    UILabel *tip = [[UILabel alloc] initWithFrame:CGRectMake(22, _y, self.view.bounds.size.width - 44, 46)];
+    UILabel *tip = [[UILabel alloc] initWithFrame:CGRectMake(22, _y, [self panelWidth] - 44, 46)];
     tip.text = @"自动打歌开启后，本局会被游戏标记为 Mod 游玩，不计入排行。"
                @"周赛 / 挑战模式的成绩仍可能上传，建议只在普通模式使用。";
     tip.font = [UIFont systemFontOfSize:11];
@@ -399,10 +429,10 @@ static UIWindowScene *rm_active_scene(void) {
 // ------------------------------ 解锁 ------------------------------
 - (void)buildUnlock {
     [self section:@"本地解锁（不写存档 / 不上传）"];
-    [self toggleRow:@"全曲解锁" detail:@"把全部曲目写入 PaymentService.ownedTracks"
+    [self toggleRow:@"全曲解锁" detail:@"写入本地登录态的曲目拥有列表（User.getItems）"
                 tag:RMRowUnlockAll on:RMUnlockAllSongs];
 
-    UILabel *tip = [[UILabel alloc] initWithFrame:CGRectMake(22, _y, self.view.bounds.size.width - 44, 46)];
+    UILabel *tip = [[UILabel alloc] initWithFrame:CGRectMake(22, _y, [self panelWidth] - 44, 46)];
     tip.text = @"解锁只存在于本次运行的进程内：重启游戏后需要重新开启。"
                @"不会修改存档、不会同步到服务器，也不会解锁付费商品。";
     tip.font = [UIFont systemFontOfSize:11];
@@ -423,7 +453,7 @@ static UIWindowScene *rm_active_scene(void) {
     [self sliderRow:[NSString stringWithFormat:@"悬浮球大小 %.0f", RMBallSize]
               value:RMBallSize min:40 max:96 action:@selector(onBallSize:)];
 
-    UILabel *tip = [[UILabel alloc] initWithFrame:CGRectMake(22, _y, self.view.bounds.size.width - 44, 40)];
+    UILabel *tip = [[UILabel alloc] initWithFrame:CGRectMake(22, _y, [self panelWidth] - 44, 40)];
     tip.text = @"悬浮球可拖动；隐藏后轻触屏幕右边缘中部的小圆点即可再次打开设置。游玩时会自动收起。";
     tip.font = [UIFont systemFontOfSize:11];
     tip.textColor = [UIColor colorWithWhite:1 alpha:0.4];
@@ -435,7 +465,7 @@ static UIWindowScene *rm_active_scene(void) {
 // ------------------------------ 诊断 ------------------------------
 - (void)buildDiagnostics {
     [self section:@"状态"];
-    gStatusLabel = [[UILabel alloc] initWithFrame:CGRectMake(22, _y, self.view.bounds.size.width - 44, 108)];
+    gStatusLabel = [[UILabel alloc] initWithFrame:CGRectMake(22, _y, [self panelWidth] - 44, 108)];
     gStatusLabel.numberOfLines = 0;
     gStatusLabel.font = [UIFont fontWithName:@"Menlo" size:11] ?: [UIFont systemFontOfSize:11];
     gStatusLabel.textColor = [UIColor colorWithWhite:0.8 alpha:1];
@@ -445,7 +475,7 @@ static UIWindowScene *rm_active_scene(void) {
     [self buttonRow:@"查看运行日志" action:@selector(onShowLog)];
     [self buttonRow:@"关闭" action:@selector(onClose)];
 
-    UILabel *tip = [[UILabel alloc] initWithFrame:CGRectMake(22, _y, self.view.bounds.size.width - 44, 40)];
+    UILabel *tip = [[UILabel alloc] initWithFrame:CGRectMake(22, _y, [self panelWidth] - 44, 40)];
     tip.text = @"本 Mod 只使用 il2cpp 反射与字段写入，不修改游戏代码页，兼容未签名 / TrollStore 环境。";
     tip.font = [UIFont systemFontOfSize:11];
     tip.textColor = [UIColor colorWithWhite:1 alpha:0.4];
@@ -456,7 +486,7 @@ static UIWindowScene *rm_active_scene(void) {
 
 // ------------------------------ 通用行 ------------------------------
 - (void)section:(NSString *)title {
-    CGFloat w = self.view.bounds.size.width - 28;
+    CGFloat w = [self panelWidth] - 28;
     RMCardView *board = [[RMCardView alloc] initWithFrame:CGRectMake(14, _y, w, 30)];
     board.fillColor = [UIColor colorWithWhite:1 alpha:0.11];
     [_scroll addSubview:board];
@@ -470,7 +500,7 @@ static UIWindowScene *rm_active_scene(void) {
 }
 
 - (void)toggleRow:(NSString *)title detail:(NSString *)detail tag:(NSInteger)tag on:(BOOL)on {
-    CGFloat w = self.view.bounds.size.width - 28;
+    CGFloat w = [self panelWidth] - 28;
     RMCardView *card = [[RMCardView alloc] initWithFrame:CGRectMake(14, _y, w, 60)];
     [_scroll addSubview:card];
 
@@ -500,7 +530,7 @@ static UIWindowScene *rm_active_scene(void) {
 }
 
 - (void)sliderRow:(NSString *)title value:(CGFloat)value min:(CGFloat)mn max:(CGFloat)mx action:(SEL)action {
-    CGFloat w = self.view.bounds.size.width - 28;
+    CGFloat w = [self panelWidth] - 28;
     RMCardView *card = [[RMCardView alloc] initWithFrame:CGRectMake(14, _y, w, 78)];
     [_scroll addSubview:card];
 
@@ -532,7 +562,7 @@ static UIWindowScene *rm_active_scene(void) {
 }
 
 - (void)buttonRow:(NSString *)title action:(SEL)action {
-    CGFloat w = self.view.bounds.size.width - 28;
+    CGFloat w = [self panelWidth] - 28;
     UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
     b.frame = CGRectMake(14, _y, w, 44);
     [b setTitle:title forState:UIControlStateNormal];
@@ -616,6 +646,11 @@ static UIWindowScene *rm_active_scene(void) {
     [self presentViewController:[RMLogViewController new] animated:YES completion:nil];
 }
 
+- (void)onBackdrop:(UITapGestureRecognizer *)g {
+    CGPoint p = [g locationInView:self.view];
+    if (!CGRectContainsPoint(_card.frame, p)) [self onClose];
+}
+
 - (void)onClose {
     [gStatusTimer invalidate];
     gStatusTimer = nil;
@@ -639,8 +674,8 @@ static UIWindowScene *rm_active_scene(void) {
 }
 
 - (BOOL)shouldAutorotate { return NO; }
-- (UIInterfaceOrientationMask)supportedInterfaceOrientations { return UIInterfaceOrientationMaskLandscape; }
-- (UIInterfaceOrientation)preferredInterfaceOrientationForPresentation { return UIInterfaceOrientationLandscapeRight; }
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations { return UIInterfaceOrientationMaskPortrait; }
+- (UIInterfaceOrientation)preferredInterfaceOrientationForPresentation { return UIInterfaceOrientationPortrait; }
 - (UIStatusBarStyle)preferredStatusBarStyle { return UIStatusBarStyleLightContent; }
 
 - (void)viewDidLoad {
