@@ -904,17 +904,11 @@ static int rm_owned_product_count(int productId) {
     return exc ? 0 : rm_boxed_int(r);
 }
 
-static int rm_sync_owned_products(void) {
+// 把某个 RizlineProductInfo 集合里的商品全部写成已拥有
+static int rm_sync_products_from_values(Il2CppObject *values) {
     if (!gPaymentClass || !gProductInfoClass || !il2cpp_array_new) return 0;
-    const MethodInfo *mMap = il2cpp_class_get_method_from_name(gPaymentClass, "GetSongProductMap", 0);
-    if (!mMap) return 0;
-    Il2CppException *exc = NULL;
-    Il2CppObject *map = il2cpp_runtime_invoke(mMap, NULL, NULL, &exc);
-    if (!map || exc) return 0;
-
-    Il2CppObject *values = rm_call_obj0(map, "get_Values");
     int n = rm_call_int0(values, "get_Count");
-    if (!values || n <= 0 || n > 5000) return 0;
+    if (!values || n <= 0 || n > 20000) return 0;
 
     Il2CppArray *arr = il2cpp_array_new(gProductInfoClass, (size_t)n);
     if (!arr) return 0;
@@ -943,6 +937,30 @@ static int rm_sync_owned_products(void) {
         Il2CppException *e3 = NULL;
         il2cpp_runtime_invoke(mSet, NULL, args, &e3);
         if (!e3) synced++;
+    }
+    return synced;
+}
+
+// 曲包 + 官方 Mod 都是 PaymentService.products 里的商品，
+// 只同步曲包会漏掉官方 Mod（按钮上还挂着 ￥6.00）。
+static int rm_sync_owned_products(void) {
+    if (!gPaymentClass || !il2cpp_class_get_field_from_name) return 0;
+    int synced = 0;
+
+    FieldInfo *fProducts = il2cpp_class_get_field_from_name(gPaymentClass, "products");
+    if (fProducts) {
+        void *dict = NULL;
+        il2cpp_field_static_get_value(fProducts, &dict);
+        if (dict) synced += rm_sync_products_from_values(rm_call_obj0(dict, "get_Values"));
+    }
+
+    const MethodInfo *mMap = il2cpp_class_get_method_from_name(gPaymentClass, "GetSongProductMap", 0);
+    if (mMap) {
+        Il2CppException *exc = NULL;
+        Il2CppObject *map = il2cpp_runtime_invoke(mMap, NULL, NULL, &exc);
+        if (map && !exc) {
+            synced += rm_sync_products_from_values(rm_call_obj0(map, "get_Values"));
+        }
     }
     return synced;
 }
@@ -1083,6 +1101,23 @@ static void rm_apply_unlock(void) {
 static NSString *gTrackIdPrefix = @"";
 static NSString *gTrackIdSuffix = @"";
 static BOOL gTrackIdAffixReady = NO;
+static NSString *gTrackIdLiteralPrefix = nil;   // 直接读游戏代码里用的常量前缀
+
+// PlayLevel / BeginOpenLevel 里判定的是 TrackUnlocked(<常量> + Level.id)，
+// 这个常量字符串在镜像里的槽位是 0x4BA9660（adrp 0x4ba9000 + #0x660），直接读出来最准。
+static void rm_read_track_id_literal(void) {
+    if (gTrackIdLiteralPrefix) return;
+    void *base = RMUnityBase();
+    if (!base) return;
+    void *slot = *(void **)((char *)base + 0x4BA9660);
+    if (!slot) return;
+    if (gStringClass && il2cpp_object_get_class &&
+        il2cpp_object_get_class((Il2CppObject *)slot) != gStringClass) return;
+    NSString *s = rm_il2cpp_string_text((Il2CppString *)slot);
+    if (!s) return;
+    gTrackIdLiteralPrefix = s;
+    RMLog(@"曲目 id 前缀(游戏常量) = \"%@\"", s);
+}
 
 static void rm_infer_track_id_affix(Il2CppObject **keys, int keyCount,
                                     void **levelIds, int levelCount) {
@@ -1116,18 +1151,58 @@ static void rm_infer_track_id_affix(Il2CppObject **keys, int keyCount,
         else gTrackIdSuffix = [best substringFromIndex:2];
     }
     gTrackIdAffixReady = YES;
-    RMLog(@"曲目 id 形式: level.id %@%@%@（样本命中 %d）",
-          gTrackIdPrefix, @"<id>", gTrackIdSuffix, bestCount);
+    NSString *sampleKey = keys && keyCount > 0 ? rm_il2cpp_string_text((Il2CppString *)keys[0]) : nil;
+    NSString *sampleLevel = levelIds && levelCount > 0 ? rm_il2cpp_string_text((Il2CppString *)levelIds[0]) : nil;
+    RMLog(@"曲目 id 形式: level.id %@%@%@（样本命中 %d）key例=%@ level例=%@",
+          gTrackIdPrefix, @"<id>", gTrackIdSuffix, bestCount,
+          sampleKey ?: @"-", sampleLevel ?: @"-");
 }
 
 static Il2CppString *rm_level_track_id(Il2CppString *levelId) {
     if (!levelId) return NULL;
-    if (gTrackIdPrefix.length == 0 && gTrackIdSuffix.length == 0) return levelId;
     if (!il2cpp_string_new) return levelId;
+    rm_read_track_id_literal();
+    NSString *prefix = gTrackIdLiteralPrefix ?: gTrackIdPrefix;
+    NSString *suffix = gTrackIdLiteralPrefix ? @"" : gTrackIdSuffix;
+    if (prefix.length == 0 && suffix.length == 0) return levelId;
     NSString *lv = rm_il2cpp_string_text(levelId);
     if (lv.length == 0) return levelId;
-    NSString *full = [NSString stringWithFormat:@"%@%@%@", gTrackIdPrefix, lv, gTrackIdSuffix];
+    NSString *full = [NSString stringWithFormat:@"%@%@%@", prefix, lv, suffix];
     return il2cpp_string_new(full.UTF8String);
+}
+
+// 官方 Mod 按钮：看每个按钮是不是还被商品锁着（解锁后这里应该全是 0）
+static void rm_log_mod_buttons(void) {
+    if (!gFindObjectsM1 || !il2cpp_class_get_type || !il2cpp_type_get_object) return;
+    Il2CppClass *k = rm_find_class_any("ModButtonControl");
+    if (!k) return;
+    Il2CppType *t = il2cpp_class_get_type(k);
+    void *typeObj = t ? il2cpp_type_get_object(t) : NULL;
+    if (!typeObj) return;
+    Il2CppException *exc = NULL;
+    void *args[1] = {typeObj};
+    Il2CppObject *arr = il2cpp_runtime_invoke(gFindObjectsM1, NULL, args, &exc);
+    if (exc || !arr) return;
+    NSUInteger n = rm_array_count(arr);
+    if (n > 64) n = 64;
+    NSMutableString *ids = [NSMutableString string];
+    int locked = 0;
+    void **elems = (void **)((char *)arr + kOff_Array_Elements);
+    for (NSUInteger i = 0; i < n; i++) {
+        void *b = elems[i];
+        if (!b) continue;
+        if (*(uint8_t *)((char *)b + 0x98)) locked++;
+        void *p = *(void **)((char *)b + 0x90);
+        int pid = p ? *(int *)((char *)p + 0x10) : 0;
+        [ids appendFormat:@"%@%d", i ? @"," : @"", pid];
+    }
+    NSString *sig = [NSString stringWithFormat:@"Mods 按钮: 共 %lu，锁定 %d，商品 id [%@]",
+                     (unsigned long)n, locked, ids];
+    static NSString *last = nil;
+    if (![sig isEqualToString:last]) {
+        last = sig;
+        RMLog(@"%@", sig);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1157,18 +1232,23 @@ static void rm_watch_play_gate(void) {
     if (!levelId) return;
 
     Il2CppString *trackId = rm_level_track_id(levelId);
-    BOOL unlocked = rm_track_unlocked(trackId);
+    BOOL unlockedRaw = rm_track_unlocked(levelId);
+    BOOL unlocked = (trackId != levelId) ? rm_track_unlocked(trackId) : unlockedRaw;
     Il2CppObject *user = rm_payment_user();
     void *items = user ? *(void **)((char *)user + kOff_User_Items) : NULL;
-    if (!unlocked && items) {
-        if (rm_owned_add(items, trackId)) {
+    if (items) {
+        if (!unlockedRaw && rm_owned_add(items, levelId)) {
+            RMLog(@"开始按钮: 补写原始曲目 id %@", rm_il2cpp_string_text(levelId) ?: @"?");
+        }
+        if (trackId != levelId && !unlocked && rm_owned_add(items, trackId)) {
             RMLog(@"开始按钮: 补写曲目 id %@", rm_il2cpp_string_text(trackId) ?: @"?");
         }
     }
 
     uint8_t onPlay = *(uint8_t *)((char *)sel + 0x20C);
-    NSString *probe = [NSString stringWithFormat:@"选曲: level=%@ onPlay=%d clip=%.1f unlocked=%d",
-                       rm_il2cpp_string_text(levelId) ?: @"-", onPlay, clipLen, unlocked ? 1 : 0];
+    NSString *probe = [NSString stringWithFormat:
+        @"选曲: level=%@ onPlay=%d clip=%.1f unlocked=%d(原始 %d)",
+        rm_il2cpp_string_text(levelId) ?: @"-", onPlay, clipLen, unlocked ? 1 : 0, unlockedRaw ? 1 : 0];
     if (![probe isEqualToString:gLastPlayProbe]) {
         gLastPlayProbe = probe;
         RMLog(@"%@", probe);
@@ -1179,36 +1259,64 @@ static void rm_watch_play_gate(void) {
 // 官方 Mods 面板位置（设置页 / 悬浮层把自定义开关贴在官方面板上）
 // ---------------------------------------------------------------------------
 BOOL RMModsPanelScreenRect(CGRect *outRect) {
-    if (!outRect || !gModsObj || !gModsClass) return NO;
-    const MethodInfo *mExpanded = il2cpp_class_get_method_from_name(gModsClass, "get_IsExpanded", 0);
-    if (!mExpanded) return NO;
-    Il2CppException *excExp = NULL;
-    Il2CppObject *expanded = il2cpp_runtime_invoke(mExpanded, NULL, NULL, &excExp);
-    if (excExp || !rm_boxed_bool(expanded)) return NO;
+    if (!outRect) return NO;
+    static NSString *lastDiag = nil;
+    NSString *diag = nil;
+    BOOL result = NO;
+    CGRect r = CGRectZero;
 
-    void *tr = rm_call_obj0(gModsObj, "get_transform");
-    if (!tr) return NO;
-    Il2CppObject *posObj = rm_call_obj0(tr, "get_position");
-    Il2CppObject *scaleObj = rm_call_obj0(tr, "get_lossyScale");
-    Il2CppObject *rectObj = rm_call_obj0(tr, "get_rect");
-    if (!posObj || !scaleObj || !rectObj) return NO;
+    if (!gModsObj || !gModsClass) {
+        diag = [NSString stringWithFormat:@"Mods 面板状态: 对象未找到 (obj=%p class=%p)", gModsObj, gModsClass];
+    } else {
+        const MethodInfo *mExpanded = il2cpp_class_get_method_from_name(gModsClass, "get_IsExpanded", 0);
+        BOOL expanded = NO;
+        if (mExpanded) {
+            Il2CppException *excExp = NULL;
+            Il2CppObject *exp = il2cpp_runtime_invoke(mExpanded, NULL, NULL, &excExp);
+            expanded = (!excExp && rm_boxed_bool(exp));
+        }
+        void *tr = rm_call_obj0(gModsObj, "get_transform");
+        Il2CppObject *posObj = tr ? rm_call_obj0(tr, "get_position") : NULL;
+        Il2CppObject *scaleObj = tr ? rm_call_obj0(tr, "get_lossyScale") : NULL;
+        Il2CppObject *rectObj = tr ? rm_call_obj0(tr, "get_rect") : NULL;
+        if (!tr || !posObj || !scaleObj || !rectObj) {
+            diag = [NSString stringWithFormat:@"Mods 面板状态: transform/rect 取不到 (tr=%p pos=%p scale=%p rect=%p)",
+                    tr, posObj, scaleObj, rectObj];
+        } else {
+            float px = *(float *)((char *)posObj + 0x10);
+            float py = *(float *)((char *)posObj + 0x14);
+            float sx = *(float *)((char *)scaleObj + 0x10);
+            float sy = *(float *)((char *)scaleObj + 0x14);
+            float rw = *(float *)((char *)rectObj + 0x18);
+            float rh = *(float *)((char *)rectObj + 0x1C);
+            diag = [NSString stringWithFormat:
+                @"Mods 面板状态: expanded=%d pos=(%.0f,%.0f) scale=(%.2f,%.2f) rect=%.0fx%.0f",
+                expanded, px, py, sx, sy, rw, rh];
+            if (expanded && rw > 0 && rh > 0 && sx > 0 && sy > 0) {
+                CGSize screen = UIScreen.mainScreen.bounds.size;
+                CGFloat w = rw * sx;
+                CGFloat h = rh * sy;
+                CGRect cand = CGRectMake(px - w / 2, screen.height - py - h / 2, w, h);
+                if (cand.size.width >= 40 && cand.size.width <= screen.width * 2 &&
+                    cand.origin.y > -600 && cand.origin.y < screen.height + 600) {
+                    r = cand;
+                    result = YES;
+                }
+            }
+        }
+    }
 
-    float px = *(float *)((char *)posObj + 0x10);
-    float py = *(float *)((char *)posObj + 0x14);
-    float sx = *(float *)((char *)scaleObj + 0x10);
-    float sy = *(float *)((char *)scaleObj + 0x14);
-    float rw = *(float *)((char *)rectObj + 0x18);
-    float rh = *(float *)((char *)rectObj + 0x1C);
-    if (!(rw > 0) || !(rh > 0) || !(sx > 0) || !(sy > 0)) return NO;
-
-    CGSize screen = UIScreen.mainScreen.bounds.size;
-    CGFloat w = rw * sx;
-    CGFloat h = rh * sy;
-    CGRect r = CGRectMake(px - w / 2, screen.height - py - h / 2, w, h);
-    if (r.size.width < 40 || r.size.width > screen.width * 2) return NO;
-    if (r.origin.y < -600 || r.origin.y > screen.height + 600) return NO;
-    *outRect = r;
-    return YES;
+    if (diag && ![diag isEqualToString:lastDiag]) {
+        static CFTimeInterval lastDiagLog = 0;
+        CFTimeInterval now = CFAbsoluteTimeGetCurrent();
+        if (now - lastDiagLog > 5.0) {
+            lastDiagLog = now;
+            lastDiag = diag;
+            RMLog(@"%@", diag);
+        }
+    }
+    if (result) *outRect = r;
+    return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -1262,6 +1370,12 @@ static void rm_runtime_tick(void) {
         gLastApply = now;
         rm_apply_mods();
         rm_watch_play_gate();
+    }
+
+    static CFTimeInterval lastModLog = 0;
+    if (gSelectObj && !RMInLevel && now - lastModLog > 3.0) {
+        lastModLog = now;
+        rm_log_mod_buttons();
     }
 
     if (RMUnlockAllSongs && now - gLastUnlock > 5.0) {
