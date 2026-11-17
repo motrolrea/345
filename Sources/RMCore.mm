@@ -1020,6 +1020,34 @@ static void rm_apply_unlock(void) {
         if (vip) rm_hashset_add(vip, tid);
     }
 
+    // 1.5) 选曲面板真正比对的是 Level.musicInfo.id（BeginOpenLevel 里的 TrackUnlocked）
+    const MethodInfo *mLevels = il2cpp_class_get_method_from_name(gLevelCtlClass, "GetAllLevel", 0);
+    if (mLevels) {
+        Il2CppException *excL = NULL;
+        Il2CppObject *levels = il2cpp_runtime_invoke(mLevels, gLevelCtlObj, NULL, &excL);
+        int lc = 0;
+        void **le = (!excL && levels) ? rm_list_items(levels, &lc) : NULL;
+        if (le && lc > 0 && lc < 20000) {
+            int musicAdded = 0;
+            for (int i = 0; i < lc; i++) {
+                void *lv = le[i];
+                if (!lv) continue;
+                void *music = *(void **)((char *)lv + 0x20);                     // Level.musicInfo
+                Il2CppString *tid = music ? *(Il2CppString **)((char *)music + 0x10) : NULL;  // MusicInfo.id
+                if (!tid) continue;
+                if (userItems && !rm_owned_has(userItems, tid)) {
+                    if (rm_owned_add(userItems, tid)) { itemAdded++; musicAdded++; }
+                }
+                if (!rm_list_contains(owned, tid)) {
+                    rm_list_add(owned, tid);
+                    trackAdded++;
+                }
+                if (vip) rm_hashset_add(vip, tid);
+            }
+            if (musicAdded > 0) RMLog(@"全曲解锁: 补写 musicInfo.id %d 个", musicAdded);
+        }
+    }
+
     // 2) 关卡 id（ownedTracks / unlockedLevels，兜底）
     int added = 0;
     for (int i = 0; i < count; i++) {
@@ -1166,19 +1194,34 @@ static void rm_watch_play_gate(void) {
 
     if (!levelId) return;
 
+    // 选曲面板（BeginOpenLevel）用的是 Level.musicInfo.id；
+    // 进关判定（PlayLevel）用的是 Level.id。两个都补齐。
+    void *music = *(void **)((char *)level + 0x20);
+    Il2CppString *musicId = music ? *(Il2CppString **)((char *)music + 0x10) : NULL;
+
     Il2CppString *trackId = rm_level_track_id(levelId);
     BOOL unlocked = rm_track_unlocked(trackId);
+    BOOL musicUnlocked = musicId ? rm_track_unlocked(musicId) : NO;
+
     Il2CppObject *user = rm_payment_user();
     void *items = user ? *(void **)((char *)user + kOff_User_Items) : NULL;
-    if (!unlocked && items) {
-        if (rm_owned_add(items, trackId)) {
+    if (items) {
+        if (!unlocked && rm_owned_add(items, trackId)) {
+            unlocked = YES;
             RMLog(@"开始按钮: 补写曲目 id %@", rm_il2cpp_string_text(trackId) ?: @"?");
+        }
+        if (musicId && !musicUnlocked && rm_owned_add(items, musicId)) {
+            musicUnlocked = YES;
+            RMLog(@"开始按钮: 补写 musicId %@", rm_il2cpp_string_text(musicId) ?: @"?");
         }
     }
 
     uint8_t onPlay = *(uint8_t *)((char *)sel + 0x20C);
-    NSString *probe = [NSString stringWithFormat:@"选曲: level=%@ onPlay=%d clip=%.1f unlocked=%d",
-                       rm_il2cpp_string_text(levelId) ?: @"-", onPlay, clipLen, unlocked ? 1 : 0];
+    NSString *probe = [NSString stringWithFormat:
+                       @"选曲: level=%@ music=%@ onPlay=%d clip=%.1f unlocked=%d/%d",
+                       rm_il2cpp_string_text(levelId) ?: @"-",
+                       rm_il2cpp_string_text(musicId) ?: @"-",
+                       onPlay, clipLen, unlocked ? 1 : 0, musicUnlocked ? 1 : 0];
     if (![probe isEqualToString:gLastPlayProbe]) {
         gLastPlayProbe = probe;
         RMLog(@"%@", probe);
@@ -1200,52 +1243,66 @@ static void rm_log_mods_rect(NSString *reason) {
 
 BOOL RMModsPanelScreenRect(CGRect *outRect) {
     if (!outRect) return NO;
-    if (!gModsObj || !gModsClass) { rm_log_mods_rect(@"未找到 ModsControl"); return NO; }
-
-    void *tr = rm_call_obj0(gModsObj, "get_transform");
-    if (!tr) { rm_log_mods_rect(@"transform 读取失败"); return NO; }
-    void *go = rm_call_obj0(tr, "get_gameObject");
-    if (!go) { rm_log_mods_rect(@"gameObject 读取失败"); return NO; }
-    if (!rm_boxed_bool(rm_call_obj0(go, "get_activeInHierarchy"))) {
-        rm_log_mods_rect(@"ModsControl 未激活");
+    if (!gModsClass || !gFindObjectsM1 || !il2cpp_class_get_type || !il2cpp_type_get_object) {
+        rm_log_mods_rect(@"缺少 ModsControl / FindObjectsOfType");
         return NO;
     }
+    Il2CppType *type = il2cpp_class_get_type(gModsClass);
+    void *typeObj = type ? il2cpp_type_get_object(type) : NULL;
+    if (!typeObj) { rm_log_mods_rect(@"ModsControl 类型对象缺失"); return NO; }
 
-    Il2CppObject *posObj = rm_call_obj0(tr, "get_position");
-    Il2CppObject *scaleObj = rm_call_obj0(tr, "get_lossyScale");
-    Il2CppObject *rectObj = rm_call_obj0(tr, "get_rect");
-    if (!posObj || !scaleObj || !rectObj) {
-        rm_log_mods_rect([NSString stringWithFormat:@"pos=%p scale=%p rect=%p", posObj, scaleObj, rectObj]);
-        return NO;
-    }
+    Il2CppException *exc = NULL;
+    void *args[1] = {typeObj};
+    Il2CppObject *arr = il2cpp_runtime_invoke(gFindObjectsM1, NULL, args, &exc);
+    if (exc || !arr) { rm_log_mods_rect(@"FindObjectsOfType 失败"); return NO; }
 
-    float px = *(float *)((char *)posObj + 0x10);
-    float py = *(float *)((char *)posObj + 0x14);
-    float sx = *(float *)((char *)scaleObj + 0x10);
-    float sy = *(float *)((char *)scaleObj + 0x14);
-    float rw = *(float *)((char *)rectObj + 0x18);
-    float rh = *(float *)((char *)rectObj + 0x1C);
-    if (!(rw > 0) || !(rh > 0) || !(sx > 0) || !(sy > 0)) {
-        rm_log_mods_rect([NSString stringWithFormat:@"数值无效 pos=(%.0f,%.0f) scale=(%.2f,%.2f) rect=(%.0f,%.0f)",
-                          px, py, sx, sy, rw, rh]);
-        return NO;
-    }
+    NSUInteger n = rm_array_count(arr);
+    if (n == 0) { rm_log_mods_rect(@"未找到 ModsControl"); return NO; }
+    if (n > 64) n = 64;
 
     CGSize screen = UIScreen.mainScreen.bounds.size;
-    CGFloat w = rw * sx;
-    CGFloat h = rh * sy;
-    CGRect r = CGRectMake(px - w / 2, screen.height - py - h / 2, w, h);
-    if (r.size.width < 40 || r.size.width > screen.width * 2) {
-        rm_log_mods_rect([NSString stringWithFormat:@"尺寸异常 %.0f×%.0f（屏幕 %.0f×%.0f）",
-                          w, h, screen.width, screen.height]);
-        return NO;
+    void **elems = (void **)((char *)arr + kOff_Array_Elements);
+    NSString *lastReason = @"无可用实例";
+    for (NSUInteger i = 0; i < n; i++) {
+        void *mods = elems[i];
+        if (!mods) continue;
+        void *tr = rm_call_obj0(mods, "get_transform");
+        void *go = tr ? rm_call_obj0(tr, "get_gameObject") : NULL;
+        if (!go || !rm_boxed_bool(rm_call_obj0(go, "get_activeInHierarchy"))) continue;
+
+        Il2CppObject *posObj = rm_call_obj0(tr, "get_position");
+        Il2CppObject *scaleObj = rm_call_obj0(tr, "get_lossyScale");
+        Il2CppObject *rectObj = rm_call_obj0(tr, "get_rect");
+        if (!posObj || !scaleObj || !rectObj) { lastReason = @"属性读取失败"; continue; }
+
+        float px = *(float *)((char *)posObj + 0x10);
+        float py = *(float *)((char *)posObj + 0x14);
+        float sx = *(float *)((char *)scaleObj + 0x10);
+        float sy = *(float *)((char *)scaleObj + 0x14);
+        float rw = *(float *)((char *)rectObj + 0x18);
+        float rh = *(float *)((char *)rectObj + 0x1C);
+        if (!(rw > 0) || !(rh > 0) || !(sx > 0) || !(sy > 0)) {
+            lastReason = [NSString stringWithFormat:@"数值无效 pos=(%.0f,%.0f) scale=(%.2f,%.2f) rect=(%.0f,%.0f)",
+                          px, py, sx, sy, rw, rh];
+            continue;
+        }
+
+        CGFloat w = rw * sx;
+        CGFloat h = rh * sy;
+        CGRect r = CGRectMake(px - w / 2, screen.height - py - h / 2, w, h);
+        if (r.size.width < 40 || r.size.width > screen.width * 2) {
+            lastReason = [NSString stringWithFormat:@"尺寸异常 %.0f×%.0f", w, h];
+            continue;
+        }
+        if (r.origin.y < -600 || r.origin.y > screen.height + 600) {
+            lastReason = [NSString stringWithFormat:@"位置异常 (%.0f,%.0f)", r.origin.x, r.origin.y];
+            continue;
+        }
+        *outRect = r;
+        return YES;
     }
-    if (r.origin.y < -600 || r.origin.y > screen.height + 600) {
-        rm_log_mods_rect([NSString stringWithFormat:@"位置异常 (%.0f,%.0f)", r.origin.x, r.origin.y]);
-        return NO;
-    }
-    *outRect = r;
-    return YES;
+    rm_log_mods_rect(lastReason);
+    return NO;
 }
 
 // ---------------------------------------------------------------------------
