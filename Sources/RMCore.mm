@@ -383,6 +383,7 @@ static Il2CppClass *gWeeklyClass = NULL;
 static Il2CppClass *gLevelCtlClass = NULL;
 static Il2CppClass *gPaymentClass = NULL;
 static Il2CppClass *gModsClass = NULL;
+static Il2CppClass *gModBtnClass = NULL;
 static Il2CppClass *gSelectClass = NULL;
 static Il2CppClass *gObjectClass = NULL;
 static Il2CppClass *gOwnedItemClass = NULL;
@@ -414,6 +415,7 @@ static uint32_t gModsHandle = 0;
 static CFTimeInterval gLastFind = 0;
 static CFTimeInterval gLastApply = 0;
 static CFTimeInterval gLastUnlock = 0;
+static CFTimeInterval gLastModUnlock = 0;
 static CFTimeInterval gLastResolve = 0;
 static BOOL gWasInLevel = NO;
 
@@ -426,6 +428,7 @@ static void rm_setup_classes(void) {
     gLevelCtlClass = rm_find_class_any("LevelControl");
     gPaymentClass = rm_find_class_any("PaymentService");
     gModsClass = rm_find_class_any("ModsControl");
+    gModBtnClass = rm_find_class_any("ModButtonControl");
     gSelectClass = rm_find_class_any("LevelSelectControl");
     gObjectClass = rm_find_class_ns("UnityEngine", "Object");
     gOwnedItemClass = rm_find_class_any("OwnedItemInfo");
@@ -1293,6 +1296,55 @@ static void rm_log_mods_rect(NSString *reason) {
     RMLog(@"Mods 面板: %@", reason);
 }
 
+// ---------------------------------------------------------------------------
+// 官方 Mod 按钮解锁
+//   这些按钮在 Init 时按 ownedProducts 记录 isLocked，看起来像付费商品。
+//   直接对每个实例跑一遍 Unlock()（清 isLocked、换图标、播解锁动画），
+//   之后点击就是正常开关，不再弹购买。
+// ---------------------------------------------------------------------------
+static int rm_unlock_mod_buttons(void) {
+    if (!gModBtnClass || !gFindObjectsM1 || !il2cpp_class_get_type || !il2cpp_type_get_object) {
+        return 0;
+    }
+    Il2CppType *type = il2cpp_class_get_type(gModBtnClass);
+    void *typeObj = type ? il2cpp_type_get_object(type) : NULL;
+    if (!typeObj) return 0;
+    Il2CppException *exc = NULL;
+    void *args[1] = {typeObj};
+    Il2CppObject *arr = il2cpp_runtime_invoke(gFindObjectsM1, NULL, args, &exc);
+    if (exc || !arr) return 0;
+
+    const MethodInfo *mUnlock = il2cpp_class_get_method_from_name(gModBtnClass, "Unlock", 0);
+    if (!mUnlock) return 0;
+
+    NSUInteger n = rm_array_count(arr);
+    if (n > 256) n = 256;
+    void **elems = (void **)((char *)arr + kOff_Array_Elements);
+    int unlocked = 0;
+    for (NSUInteger i = 0; i < n; i++) {
+        void *btn = elems[i];
+        if (!btn) continue;
+        if (*(uint8_t *)((char *)btn + 0x98) == 0) continue;   // ModButtonControl.isLocked
+        Il2CppException *e2 = NULL;
+        il2cpp_runtime_invoke(mUnlock, btn, NULL, &e2);
+        if (!e2) unlocked++;
+    }
+    if (unlocked > 0) RMLog(@"官方 Mod 解锁: %d 个按钮", unlocked);
+    return unlocked;
+}
+
+BOOL RMModsPanelPresent(void) {
+    if (!gModsClass || !gFindObjectsM1 || !il2cpp_class_get_type || !il2cpp_type_get_object) return NO;
+    Il2CppType *type = il2cpp_class_get_type(gModsClass);
+    void *typeObj = type ? il2cpp_type_get_object(type) : NULL;
+    if (!typeObj) return NO;
+    Il2CppException *exc = NULL;
+    void *args[1] = {typeObj};
+    Il2CppObject *arr = il2cpp_runtime_invoke(gFindObjectsM1, NULL, args, &exc);
+    if (exc || !arr) return NO;
+    return rm_array_count(arr) > 0;
+}
+
 BOOL RMModsPanelScreenRect(CGRect *outRect) {
     if (!outRect) return NO;
     if (!gModsClass || !gFindObjectsM1 || !il2cpp_class_get_type || !il2cpp_type_get_object) {
@@ -1410,6 +1462,11 @@ static void rm_runtime_tick(void) {
         gLastApply = now;
         rm_apply_mods();
         rm_watch_play_gate();
+    }
+
+    if (now - gLastModUnlock > 2.0) {
+        gLastModUnlock = now;
+        rm_unlock_mod_buttons();
     }
 
     if (RMUnlockAllSongs && now - gLastUnlock > 5.0 && now > gDiscSwitchUntil) {

@@ -924,6 +924,47 @@ static void rm_dock_set(NSInteger tag, BOOL on) {
     RMUpdateBall();
 }
 
+@interface RMModChip : UIControl
+@property (nonatomic, strong) UIImageView *iconView;
+@property (nonatomic, strong) UILabel *captionLabel;
+@end
+
+@implementation RMModChip
+- (instancetype)initWithTitle:(NSString *)title symbol:(NSString *)symbol {
+    if ((self = [super initWithFrame:CGRectMake(0, 0, 48, 46)])) {
+        self.backgroundColor = [UIColor colorWithWhite:0 alpha:0.45];
+        self.layer.cornerRadius = 12;
+        self.layer.borderWidth = 1.0 / UIScreen.mainScreen.scale;
+        self.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.30].CGColor;
+        self.layer.masksToBounds = YES;
+
+        _iconView = [[UIImageView alloc] initWithFrame:CGRectMake(0, 7, 48, 20)];
+        _iconView.contentMode = UIViewContentModeScaleAspectFit;
+        _iconView.image = [UIImage systemImageNamed:symbol];
+        _iconView.userInteractionEnabled = NO;
+        [self addSubview:_iconView];
+
+        _captionLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 28, 48, 14)];
+        _captionLabel.text = title;
+        _captionLabel.font = [UIFont systemFontOfSize:8 weight:UIFontWeightSemibold];
+        _captionLabel.textAlignment = NSTextAlignmentCenter;
+        _captionLabel.userInteractionEnabled = NO;
+        [self addSubview:_captionLabel];
+    }
+    return self;
+}
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    CGFloat w = self.bounds.size.width;
+    _iconView.frame = CGRectMake(0, 7, w, 20);
+    _captionLabel.frame = CGRectMake(0, 28, w, 14);
+}
+- (void)setHighlighted:(BOOL)highlighted {
+    [super setHighlighted:highlighted];
+    self.alpha = highlighted ? 0.6 : 1.0;
+}
+@end
+
 @interface RMModsDockView : UIView
 - (void)refreshStates;
 - (void)applyWidth:(CGFloat)width;
@@ -932,7 +973,7 @@ static void rm_dock_set(NSInteger tag, BOOL on) {
 @end
 
 @implementation RMModsDockView {
-    NSMutableArray<UIButton *> *_chips;
+    NSMutableArray<RMModChip *> *_chips;
 }
 
 - (instancetype)initWithFrame:(CGRect)frame {
@@ -941,64 +982,57 @@ static void rm_dock_set(NSInteger tag, BOOL on) {
         _chips = [NSMutableArray array];
         NSArray<NSNumber *> *tags = rm_dock_tags();
         NSArray<NSString *> *titles = rm_dock_titles();
+        NSArray<NSString *> *symbols = @[@"wand.and.stars", @"shield.lefthalf.filled",
+                                         @"hand.raised.fill", @"heart.fill",
+                                         @"lock.open.fill", @"circle.grid.2x2.fill"];
         for (NSInteger i = 0; i < tags.count; i++) {
-            UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
-            b.tag = tags[i].integerValue;
-            b.titleLabel.font = [UIFont boldSystemFontOfSize:11];
-            b.titleLabel.adjustsFontSizeToFitWidth = YES;
-            b.titleLabel.minimumScaleFactor = 0.7;
-            b.layer.cornerRadius = 7;
-            b.layer.masksToBounds = YES;
-            b.layer.borderWidth = 1.0 / UIScreen.mainScreen.scale;
-            [b setTitle:titles[i] forState:UIControlStateNormal];
-            [b addTarget:self action:@selector(onChip:) forControlEvents:UIControlEventTouchUpInside];
-            [self addSubview:b];
-            [_chips addObject:b];
+            RMModChip *c = [[RMModChip alloc] initWithTitle:titles[i]
+                                                     symbol:(i < (NSInteger)symbols.count ? symbols[i] : @"circle")];
+            c.tag = tags[i].integerValue;
+            [c addTarget:self action:@selector(onChip:) forControlEvents:UIControlEventTouchUpInside];
+            [self addSubview:c];
+            [_chips addObject:c];
         }
         [self refreshStates];
     }
     return self;
 }
 
-- (void)onChip:(UIButton *)sender {
+- (void)onChip:(RMModChip *)sender {
     rm_dock_set(sender.tag, !rm_dock_get(sender.tag));
     [self refreshStates];
 }
 
 - (void)refreshStates {
-    for (UIButton *b in _chips) {
-        BOOL on = rm_dock_get(b.tag);
-        UIColor *fill = on ? RMAccentColor() : [UIColor colorWithWhite:0 alpha:0.45];
-        b.backgroundColor = fill;
-        b.layer.borderColor = [UIColor colorWithWhite:1 alpha:on ? 0.9 : 0.35].CGColor;
-        [b setTitleColor:(on ? UIColor.blackColor : [UIColor colorWithWhite:1 alpha:0.85])
-                forState:UIControlStateNormal];
+    for (RMModChip *c in _chips) {
+        BOOL on = rm_dock_get(c.tag);
+        c.backgroundColor = on ? RMAccentColor() : [UIColor colorWithWhite:0 alpha:0.45];
+        c.layer.borderColor = [UIColor colorWithWhite:1 alpha:(on ? 0.9 : 0.30)].CGColor;
+        UIColor *fg = on ? UIColor.blackColor : [UIColor colorWithWhite:1 alpha:0.9];
+        c.iconView.tintColor = fg;
+        c.captionLabel.textColor = fg;
     }
 }
 
 - (NSInteger)perRowForWidth:(CGFloat)width {
-    CGFloat chipMin = 52, gap = 6;
-    NSInteger perRow = (NSInteger)((width + gap) / (chipMin + gap));
-    if (perRow < 1) perRow = 1;
-    if (perRow > (NSInteger)_chips.count) perRow = (NSInteger)_chips.count;
-    return perRow;
+    return (NSInteger)_chips.count;
 }
 
 - (CGFloat)heightForWidth:(CGFloat)width {
-    NSInteger rows = (_chips.count + [self perRowForWidth:width] - 1) / [self perRowForWidth:width];
-    return rows * 28 + (rows - 1) * 6;
+    return 46;
 }
 
 - (void)applyWidth:(CGFloat)width {
     CGFloat gap = 6;
-    NSInteger perRow = [self perRowForWidth:width];
-    CGFloat chipW = (width - gap * (perRow - 1)) / perRow;
-    for (NSInteger i = 0; i < (NSInteger)_chips.count; i++) {
-        NSInteger row = i / perRow;
-        NSInteger col = i % perRow;
-        _chips[i].frame = CGRectMake(col * (chipW + gap), row * 34, chipW, 28);
+    NSInteger n = (NSInteger)_chips.count;
+    CGFloat chipW = (width - gap * (n - 1)) / n;
+    chipW = MIN(chipW, 56);
+    CGFloat used = chipW * n + gap * (n - 1);
+    CGFloat x0 = (width - used) / 2;
+    for (NSInteger i = 0; i < n; i++) {
+        _chips[i].frame = CGRectMake(x0 + i * (chipW + gap), 0, chipW, 46);
     }
-    self.frame = CGRectMake(0, 0, width, [self heightForWidth:width]);
+    self.frame = CGRectMake(0, 0, width, 46);
 }
 
 @end
@@ -1008,25 +1042,21 @@ static UIWindow *gDockWindow = nil;
 static void rm_update_dock(void) {
     if (!gDockWindow) return;
     BOOL gameplay = rm_in_gameplay();
-    BOOL show = !gPanelWindow && gBallWindow && !gBallWindow.hidden &&
-                !(RMAutoHideInGame && gameplay);
+    BOOL show = !gPanelWindow && RMModsPanelPresent() && !(RMAutoHideInGame && gameplay);
     if (!show) {
         gDockWindow.hidden = YES;
         return;
     }
     UIWindowScene *scene = rm_active_scene();
     CGRect sb = scene ? scene.coordinateSpace.bounds : UIScreen.mainScreen.bounds;
-    CGRect ball = gBallWindow.frame;
-    CGFloat width = 200;
+    // 官方 Mods 条在选曲页中部；自定义开关作为第二行贴在它下面（按屏幕比例定位）
+    CGFloat width = sb.size.width * 0.81;
+    CGFloat x = sb.size.width * 0.095;
+    CGFloat y = sb.size.height * 0.255;
     RMModsDockView *dock = (RMModsDockView *)gDockWindow.rootViewController.view.subviews.firstObject;
     if (!dock) return;
     [dock applyWidth:width];
     CGFloat h = dock.bounds.size.height;
-
-    CGFloat x = MAX(8, MIN(sb.size.width - width - 8, ball.origin.x));
-    CGFloat y = CGRectGetMaxY(ball) + 8;
-    if (y + h > sb.size.height - 8) y = ball.origin.y - h - 8;
-    y = MAX(24, y);
     gDockWindow.frame = CGRectMake(x, y, width, h);
     [dock refreshStates];
     gDockWindow.hidden = NO;
