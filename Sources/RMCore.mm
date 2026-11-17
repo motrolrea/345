@@ -1363,7 +1363,7 @@ static Il2CppObject *rm_clone_action_delegate(Il2CppObject *proto) {
     if (!proto || !il2cpp_object_new) return NULL;
     Il2CppClass *k = il2cpp_object_get_class(proto);
     if (!k) return NULL;
-    Il2CppObject *d = il2cpp_object_new(k);
+    Il2CppObject *d = (Il2CppObject *)il2cpp_object_new(k);
     if (!d) return NULL;
     memcpy((char *)d + 0x10, (char *)proto + 0x10, 0x60);
     *(void **)((char *)d + 0x10) = (void *)rm_chip_tap;   // method_ptr
