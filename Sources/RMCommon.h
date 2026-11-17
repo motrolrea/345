@@ -8,7 +8,8 @@ extern "C" {
 #endif
 
 // 全局开关（由设置页修改，运行时轮询中读取）
-extern bool RMAutoPlay;        // 官方 AutoPlay：自动打歌（MaxPerfect）
+extern bool RMAutoPlay;        // 自动游玩：用判定层 AutoPlay，正常结算有成绩
+extern bool RMAutoDemo;        // 自动演示：走官方 ModsControl.AutoPlay，结算不计成绩
 extern bool RMNoBad;           // 官方 NoBad：Bad 不扣血 / 不中断
 extern bool RMFreeHold;        // 官方 FreeHold：长条自由松手
 extern bool RMLockHP;          // 锁血：保持满血
@@ -47,6 +48,8 @@ void RMUpdateBall(void);
 
 // 拦截成绩上传（返回本地假 200）
 void RMInstallUploadBlocker(void);
+// 从远端资源服务器增量下载缺失的歌曲 bundle 到 Addressables 缓存
+void RMStartResourceDownload(void);
 
 // 官方 Mods 面板当前的屏幕区域（Unity 坐标换算成 UIKit 坐标）；面板收起时返回 NO
 BOOL RMModsPanelScreenRect(CGRect *outRect);

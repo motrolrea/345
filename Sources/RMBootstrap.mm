@@ -16,6 +16,7 @@ static void RMBootstrap(void) {
 
     NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
     RMAutoPlay       = [d objectForKey:@"rm.auto"] ? [d boolForKey:@"rm.auto"] : YES;
+    RMAutoDemo       = [d boolForKey:@"rm.demo"];
     RMNoBad          = [d boolForKey:@"rm.nobad"];
     RMFreeHold       = [d boolForKey:@"rm.freehold"];
     RMLockHP         = [d boolForKey:@"rm.hp"];

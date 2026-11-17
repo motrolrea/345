@@ -15,6 +15,8 @@ typedef NS_ENUM(NSInteger, RMRowTag) {
     RMRowUnlockAll,
     RMRowBallShow,
     RMRowAutoHide,
+    RMRowAutoDemo,
+    RMRowDownloadAssets,
 };
 
 @interface RMSettingsController : UIViewController
@@ -407,9 +409,12 @@ static UIWindowScene *rm_active_scene(void) {
 // ------------------------------ 玩法 ------------------------------
 - (void)buildGameplay {
     [self section:@"判定"];
-    [self toggleRow:@"自动打歌（全 Perfect）"
-              detail:@"官方 AutoPlay：按判定时间自动命中，挑战段为 MaxPerfect"
+    [self toggleRow:@"自动游玩（有成绩）"
+              detail:@"判定层 AutoPlay：自动命中并正常结算，但不写入排行榜"
                  tag:RMRowAutoPlay on:RMAutoPlay];
+    [self toggleRow:@"自动演示（不计成绩）"
+              detail:@"官方 AutoPlay / 演示模式：结算不给成绩"
+                 tag:RMRowAutoDemo on:RMAutoDemo];
     [self toggleRow:@"无 Bad" detail:@"官方 NoBad：Bad 不扣血、不断连"
                 tag:RMRowNoBad on:RMNoBad];
     [self toggleRow:@"自由 Hold" detail:@"官方 FreeHold：长条可以提前松手"
@@ -432,6 +437,8 @@ static UIWindowScene *rm_active_scene(void) {
     [self section:@"本地解锁（不写存档 / 不上传）"];
     [self toggleRow:@"全曲解锁" detail:@"写入本地登录态的曲目拥有列表（User.getItems）"
                 tag:RMRowUnlockAll on:RMUnlockAllSongs];
+
+    [self buttonRow:@"下载缺失歌曲资源（增量）" action:@selector(onDownloadAssets)];
 
     UILabel *tip = [[UILabel alloc] initWithFrame:CGRectMake(22, _y, [self panelWidth] - 44, 46)];
     tip.text = @"解锁只存在于本次运行的进程内：重启游戏后需要重新开启。"
@@ -576,11 +583,21 @@ static UIWindowScene *rm_active_scene(void) {
     _y += 50;
 }
 
+- (void)onDownloadAssets {
+    RMStartResourceDownload();
+    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"资源下载"
+                                                              message:@"已开始增量下载，进度见日志（RizlineMod.log）"
+                                                       preferredStyle:UIAlertControllerStyleAlert];
+    [a addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
+    [self presentViewController:a animated:YES completion:nil];
+}
+
 // ------------------------------ 事件 ------------------------------
 - (void)onToggle:(RMToggle *)sender {
     BOOL on = sender.on;
     switch (sender.tag) {
         case RMRowAutoPlay: RMAutoPlay = on; break;
+        case RMRowAutoDemo: RMAutoDemo = on; break;
         case RMRowNoBad: RMNoBad = on; break;
         case RMRowFreeHold: RMFreeHold = on; break;
         case RMRowLockHP: RMLockHP = on; break;
@@ -620,6 +637,7 @@ static UIWindowScene *rm_active_scene(void) {
 - (void)persist {
     NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
     [d setBool:RMAutoPlay forKey:@"rm.auto"];
+    [d setBool:RMAutoDemo forKey:@"rm.demo"];
     [d setBool:RMNoBad forKey:@"rm.nobad"];
     [d setBool:RMFreeHold forKey:@"rm.freehold"];
     [d setBool:RMLockHP forKey:@"rm.hp"];
@@ -914,6 +932,7 @@ static void rm_dock_set(NSInteger tag, BOOL on) {
     }
     NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
     [d setBool:RMAutoPlay forKey:@"rm.auto"];
+    [d setBool:RMAutoDemo forKey:@"rm.demo"];
     [d setBool:RMNoBad forKey:@"rm.nobad"];
     [d setBool:RMFreeHold forKey:@"rm.freehold"];
     [d setBool:RMLockHP forKey:@"rm.hp"];

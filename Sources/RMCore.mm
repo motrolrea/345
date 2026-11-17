@@ -36,6 +36,7 @@
 // 全局状态
 // ---------------------------------------------------------------------------
 bool RMAutoPlay = true;
+bool RMAutoDemo = false;
 bool RMNoBad = false;
 bool RMFreeHold = false;
 bool RMLockHP = false;
@@ -761,9 +762,12 @@ static void rm_hashset_add(void *set, Il2CppString *value) {
 // 玩法开关
 // ---------------------------------------------------------------------------
 static void rm_apply_mods(void) {
-    // 官方 Mod 静态状态：让结算把本局标记成 Mod 游玩
+    bool autoJudge = RMAutoPlay || RMAutoDemo;
+    // 官方 Mod 静态状态：
+    //   AutoPlay（官方的“自动演示”）只有在 RMAutoDemo 打开时才置位，
+    //   否则游戏会把本局标记成演示、结算不给成绩。
     if (gModsClass) {
-        rm_call_static_bool(gModsClass, "set_AutoPlay", RMAutoPlay);
+        rm_call_static_bool(gModsClass, "set_AutoPlay", RMAutoDemo);
         rm_call_static_bool(gModsClass, "set_NoBad", RMNoBad);
         rm_call_static_bool(gModsClass, "set_FreeHold", RMFreeHold);
     }
@@ -788,7 +792,7 @@ static void rm_apply_mods(void) {
     void *judge = *(void **)((char *)gInfoObj + kOff_Info_NoteJudge);
     if (judge && gJudgeClass && il2cpp_object_get_class &&
         il2cpp_object_get_class((Il2CppObject *)judge) == gJudgeClass) {
-        rm_obj_set_bool(judge, kOff_Judge_AutoPlay, RMAutoPlay);
+        rm_obj_set_bool(judge, kOff_Judge_AutoPlay, autoJudge);
         rm_obj_set_bool(judge, kOff_Judge_FreeHold, RMFreeHold);
 
         void *notes = *(void **)((char *)judge + kOff_Judge_Notes);
@@ -812,7 +816,7 @@ static void rm_apply_mods(void) {
 
     if (gNormalObj) {
         rm_obj_set_bool(gNormalObj, kOff_Normal_NoBad, RMNoBad);
-        rm_obj_set_bool(gNormalObj, kOff_Normal_AutoPlayField, RMAutoPlay);
+        rm_obj_set_bool(gNormalObj, kOff_Normal_AutoPlayField, autoJudge);
         if (RMLockHP) rm_obj_set_float(gNormalObj, kOff_Normal_Life, 1.0f);
     }
     if (gChallengeObj) {
