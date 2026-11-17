@@ -1327,6 +1327,10 @@ static int rm_unlock_mod_buttons(void) {
         void *btn = elems[i];
         if (!btn) continue;
         if (*(uint8_t *)((char *)btn + 0x98) == 0) continue;   // ModButtonControl.isLocked
+        // 只处理当前真正显示着的面板，别去动预热中的隐藏面板（会让切盘流程卡住）
+        void *btr = rm_call_obj0(btn, "get_transform");
+        void *bgo = btr ? rm_call_obj0(btr, "get_gameObject") : NULL;
+        if (!bgo || !rm_boxed_bool(rm_call_obj0(bgo, "get_activeInHierarchy"))) continue;
         Il2CppException *e2 = NULL;
         il2cpp_runtime_invoke(mUnlock, btn, NULL, &e2);
         if (!e2) unlocked++;
@@ -1452,11 +1456,29 @@ static void rm_append_custom_mods(void) {
             if (mSetPos && tmplW > 1 && tmplH > 1) {
                 Il2CppObject *tr2 = rm_call_obj0(comp, "get_transform");
                 if (tr2) {
-                    struct { float x, y; } p = { tmplX + (float)(k + 1) * (tmplW + 8),
-                                                 tmplY - (tmplH + 8) };
+                    // 放到官方那排的正上方一行（下面被面板遮罩裁掉的可能性更大）
+                    struct { float x, y; } p = { tmplX - (float)(k + 1) * (tmplW + 8),
+                                                 tmplY + tmplH + 8 };
                     Il2CppException *e3 = NULL;
                     void *pargs[1] = {&p};
                     il2cpp_runtime_invoke(mSetPos, tr2, pargs, &e3);
+                }
+            }
+            const MethodInfo *mSetActive = il2cpp_class_get_method_from_name(gGoClass, "SetActive", 1);
+            if (mSetActive) {
+                uint8_t yes = 1;
+                void *sargs[1] = {&yes};
+                Il2CppException *e4 = NULL;
+                il2cpp_runtime_invoke(mSetActive, cloneGo, sargs, &e4);
+            }
+            if (k == 0) {
+                Il2CppObject *tr3 = rm_call_obj0(comp, "get_transform");
+                Il2CppObject *wp = tr3 ? rm_call_obj0(tr3, "get_position") : NULL;
+                if (wp) {
+                    float wx = *(float *)((char *)wp + 0x10);
+                    float wy = *(float *)((char *)wp + 0x14);
+                    float wz = *(float *)((char *)wp + 0x18);
+                    RMLog(@"自定义 Mod: 第1个克隆 world=(%.0f,%.0f,%.0f)", wx, wy, wz);
                 }
             }
             added++;
