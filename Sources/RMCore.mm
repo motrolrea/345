@@ -386,6 +386,7 @@ static Il2CppClass *gModsClass = NULL;
 static Il2CppClass *gModBtnClass = NULL;
 static Il2CppClass *gSelectClass = NULL;
 static Il2CppClass *gObjectClass = NULL;
+static Il2CppClass *gGoClass = NULL;
 static Il2CppClass *gOwnedItemClass = NULL;
 static Il2CppClass *gProductInfoClass = NULL;
 static Il2CppClass *gStringClass = NULL;
@@ -431,6 +432,7 @@ static void rm_setup_classes(void) {
     gModBtnClass = rm_find_class_any("ModButtonControl");
     gSelectClass = rm_find_class_any("LevelSelectControl");
     gObjectClass = rm_find_class_ns("UnityEngine", "Object");
+    gGoClass = rm_find_class_ns("UnityEngine", "GameObject");
     gOwnedItemClass = rm_find_class_any("OwnedItemInfo");
     gProductInfoClass = rm_find_class_any("RizlineProductInfo");
     gStringClass = rm_find_class_ns("System", "String");
@@ -1333,6 +1335,110 @@ static int rm_unlock_mod_buttons(void) {
     return unlocked;
 }
 
+// ---------------------------------------------------------------------------
+// 在官方 Mods 条里追加自定义按钮
+//   克隆一个已初始化的 ModButtonControl（保留图标 / 动画 / 布局），挂到同一个父节点，
+//   布局组会把它排在官方按钮后面；点击回调换成我们伪造的 Action<int> 委托。
+// ---------------------------------------------------------------------------
+static void rm_chip_tap(void *target, int32_t index) {
+    int which = (int)index - 200;
+    switch (which) {
+        case 0: RMLockHP = !RMLockHP; break;
+        case 1: RMUnlockAllSongs = !RMUnlockAllSongs; break;
+        case 2: RMBallVisible = !RMBallVisible; break;
+        default: return;
+    }
+    NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
+    [d setBool:RMLockHP forKey:@"rm.hp"];
+    [d setBool:RMUnlockAllSongs forKey:@"rm.unlock"];
+    [d setBool:RMBallVisible forKey:@"rm.ball.show"];
+    RMLog(@"自定义 Mod 点击: %d (锁血=%d 解锁=%d 球=%d)",
+          which, RMLockHP, RMUnlockAllSongs, RMBallVisible);
+    RMApplySettingsNow();
+    RMUpdateBall();
+}
+
+// 复制一个现成的 Action<int> 委托对象，只把入口换成我们自己的 C 函数
+static Il2CppObject *rm_clone_action_delegate(Il2CppObject *proto) {
+    if (!proto || !il2cpp_object_new) return NULL;
+    Il2CppClass *k = il2cpp_object_get_class(proto);
+    if (!k) return NULL;
+    Il2CppObject *d = il2cpp_object_new(k);
+    if (!d) return NULL;
+    memcpy((char *)d + 0x10, (char *)proto + 0x10, 0x60);
+    *(void **)((char *)d + 0x10) = (void *)rm_chip_tap;   // method_ptr
+    *(void **)((char *)d + 0x20) = (void *)1;             // m_target（占位，不用）
+    return d;
+}
+
+static void *gCustomModsOwner = NULL;
+
+static void rm_append_custom_mods(void) {
+    if (!gModsClass || !gModBtnClass || !gObjectClass || !gGoClass || !gFindObjectsM1) return;
+
+    Il2CppType *mt = il2cpp_class_get_type(gModsClass);
+    void *mtObj = mt ? il2cpp_type_get_object(mt) : NULL;
+    if (!mtObj) return;
+    Il2CppException *exc = NULL;
+    void *args[1] = {mtObj};
+    Il2CppObject *modsArr = il2cpp_runtime_invoke(gFindObjectsM1, NULL, args, &exc);
+    if (exc || !modsArr) return;
+
+    NSUInteger n = rm_array_count(modsArr);
+    if (n == 0 || n > 32) return;
+    void **modsElems = (void **)((char *)modsArr + kOff_Array_Elements);
+
+    for (NSUInteger i = 0; i < n; i++) {
+        void *mods = modsElems[i];
+        if (!mods || mods == gCustomModsOwner) continue;
+        void *tr = rm_call_obj0(mods, "get_transform");
+        void *go = tr ? rm_call_obj0(tr, "get_gameObject") : NULL;
+        if (!go || !rm_boxed_bool(rm_call_obj0(go, "get_activeInHierarchy"))) continue;
+
+        void *buttons = *(void **)((char *)mods + 0xD8);   // ModsControl.modButtons
+        int count = buttons ? (int)rm_array_count(buttons) : 0;
+        if (count <= 0) continue;
+        void *tmpl = ((void **)((char *)buttons + kOff_Array_Elements))[count - 1];
+        if (!tmpl) continue;
+
+        void *tmplGo = rm_call_obj0(tmpl, "get_gameObject");
+        void *tmplTr = rm_call_obj0(tmpl, "get_transform");
+        void *parentTr = tmplTr ? rm_call_obj0(tmplTr, "get_parent") : NULL;
+        Il2CppObject *proto = (Il2CppObject *)*(void **)((char *)tmpl + 0xA8);   // onClick
+        if (!tmplGo || !parentTr || !proto) continue;
+
+        const MethodInfo *mInst = il2cpp_class_get_method_from_name(gObjectClass, "Instantiate", 2);
+        const MethodInfo *mGetComp = il2cpp_class_get_method_from_name(gGoClass, "GetComponent", 1);
+        Il2CppType *bt = il2cpp_class_get_type(gModBtnClass);
+        void *btObj = bt ? il2cpp_type_get_object(bt) : NULL;
+        if (!mInst || !mGetComp || !btObj) return;
+
+        Il2CppObject *delegate = rm_clone_action_delegate(proto);
+        if (!delegate) { RMLog(@"自定义 Mod: 委托复制失败"); return; }
+
+        int added = 0;
+        for (int k = 0; k < 3; k++) {
+            void *instArgs[2] = {tmplGo, parentTr};
+            Il2CppException *e1 = NULL;
+            Il2CppObject *cloneGo = il2cpp_runtime_invoke(mInst, NULL, instArgs, &e1);
+            if (e1 || !cloneGo) break;
+            void *compArgs[1] = {btObj};
+            Il2CppException *e2 = NULL;
+            Il2CppObject *comp = il2cpp_runtime_invoke(mGetComp, cloneGo, compArgs, &e2);
+            if (e2 || !comp) break;
+            *(int *)((char *)comp + 0x70) = 200 + k;     // modIndex
+            *(uint8_t *)((char *)comp + 0x98) = 0;       // isLocked
+            *(uint8_t *)((char *)comp + 0xD8) = 0;       // onUnlockPopup
+            *(void **)((char *)comp + 0xA8) = delegate;  // onClick
+            added++;
+        }
+        gCustomModsOwner = mods;
+        RMLog(@"自定义 Mod: 追加 %d 个按钮（锁血 / 解锁 / 球）", added);
+        return;
+    }
+}
+
+
 BOOL RMModsPanelPresent(void) {
     if (!gModsClass || !gFindObjectsM1 || !il2cpp_class_get_type || !il2cpp_type_get_object) return NO;
     Il2CppType *type = il2cpp_class_get_type(gModsClass);
@@ -1467,6 +1573,13 @@ static void rm_runtime_tick(void) {
     if (now - gLastModUnlock > 2.0) {
         gLastModUnlock = now;
         rm_unlock_mod_buttons();
+        rm_append_custom_mods();
+    }
+
+    static CFTimeInterval lastBeat = 0;
+    if (now - lastBeat > 10.0) {
+        lastBeat = now;
+        RMLog(@"心跳: 主线程正常 inLevel=%d disc=%d", RMInLevel ? 1 : 0, gLastDiscId);
     }
 
     if (RMUnlockAllSongs && now - gLastUnlock > 5.0 && now > gDiscSwitchUntil) {

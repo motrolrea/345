@@ -860,7 +860,6 @@ void RMShowOverlay(void) {
             RMLog(@"悬浮球已创建");
         }
         RMUpdateBall();
-        rm_setup_dock_window(scene);
         if (!timerStarted) {
             timerStarted = YES;
             [NSTimer scheduledTimerWithTimeInterval:1.0 target:[RMBallTicker shared]
