@@ -45,6 +45,9 @@ void RMStartRuntimeFeatures(void);
 void RMShowOverlay(void);
 void RMUpdateBall(void);
 
+// 拦截成绩上传（返回本地假 200）
+void RMInstallUploadBlocker(void);
+
 // 官方 Mods 面板当前的屏幕区域（Unity 坐标换算成 UIKit 坐标）；面板收起时返回 NO
 BOOL RMModsPanelScreenRect(CGRect *outRect);
 // 当前场景里是否存在官方 Mods 面板（用于决定是否显示自定义开关条）

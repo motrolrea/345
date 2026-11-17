@@ -8,6 +8,7 @@ __attribute__((constructor))
 static void RMBootstrap(void) {
     RMLogReset();              // 每次启动重新生成日志
     RMLogInstallCrashHandler();
+    RMInstallUploadBlocker();
     NSBundle *bundle = [NSBundle mainBundle];
     RMLog(@"启动: %@ %@ (%@)", bundle.bundleIdentifier,
           [bundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"],

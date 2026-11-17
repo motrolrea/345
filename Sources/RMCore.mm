@@ -1456,8 +1456,9 @@ static void rm_append_custom_mods(void) {
             if (mSetPos && tmplW > 1 && tmplH > 1) {
                 Il2CppObject *tr2 = rm_call_obj0(comp, "get_transform");
                 if (tr2) {
-                    // 和官方按钮同一行，排在最后一个按钮右边
-                    struct { float x, y; } p = { tmplX + (float)(k + 1) * (tmplW + 8), tmplY };
+                    // 官方那排上方新增一行：x 以模板为中心左右排开
+                    struct { float x, y; } p = { tmplX + (float)(k - 1) * (tmplW + 8),
+                                                 tmplY + tmplH + 8 };
                     Il2CppException *e3 = NULL;
                     void *pargs[1] = {&p};
                     il2cpp_runtime_invoke(mSetPos, tr2, pargs, &e3);
@@ -1489,6 +1490,28 @@ static void rm_append_custom_mods(void) {
             added++;
         }
         gCustomModsOwner = mods;
+
+        // 把官方 Mods 栏整体拉高一行，让新增的那排也在栏内
+        if (tmplH > 1) {
+            Il2CppObject *prt = rm_call_obj0(mods, "get_transform");
+            Il2CppObject *psz = prt ? rm_call_obj0(prt, "get_sizeDelta") : NULL;
+            Il2CppObject *pps = prt ? rm_call_obj0(prt, "get_anchoredPosition") : NULL;
+            const MethodInfo *mSetSize = il2cpp_class_get_method_from_name(gRectTransformClass, "set_sizeDelta", 1);
+            if (prt && psz && pps && mSetSize) {
+                float sw = *(float *)((char *)psz + 0x10);
+                float sh = *(float *)((char *)psz + 0x14);
+                float ax = *(float *)((char *)pps + 0x10);
+                float ay = *(float *)((char *)pps + 0x14);
+                struct { float x, y; } ns = { sw, sh + tmplH + 12 };
+                struct { float x, y; } np = { ax, ay + (tmplH + 12) / 2 };
+                Il2CppException *e6 = NULL, *e7 = NULL;
+                void *a1[1] = {&ns};
+                il2cpp_runtime_invoke(mSetSize, prt, a1, &e6);
+                void *a2[1] = {&np};
+                if (mSetPos) il2cpp_runtime_invoke(mSetPos, prt, a2, &e7);
+                RMLog(@"自定义 Mod: 面板加高 %.0f（原 %.0f×%.0f）", tmplH + 12, sw, sh);
+            }
+        }
         RMLog(@"自定义 Mod: 追加 %d 个按钮（锁血 / 解锁 / 球）", added);
         return;
     }

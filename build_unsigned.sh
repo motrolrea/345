@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+﻿#!/usr/bin/env bash
 # 在 macOS 上编译 RizlineMod（arm64, iOS 15+）
 # 产物：
 #   build/RizlineMod.framework        —— 注入 App 用
@@ -15,6 +15,7 @@ SRC=(
   Sources/RMBootstrap.mm
   Sources/RMCore.mm
   Sources/RMOverlay.mm
+  Sources/RMNet.mm
 )
 
 COMMON=(
