@@ -1416,6 +1416,24 @@ static void rm_append_custom_mods(void) {
         Il2CppObject *delegate = rm_clone_action_delegate(proto);
         if (!delegate) { RMLog(@"自定义 Mod: 委托复制失败"); return; }
 
+        // 官方这条 Mods 是手工布局（不是滑动列表），克隆体默认会叠在原位置，
+        // 这里把它们的 anchoredPosition 排到最后那个按钮下面一行。
+        float tmplX = 0, tmplY = 0, tmplW = 100, tmplH = 100;
+        {
+            Il2CppObject *rt = (Il2CppObject *)tmplTr;
+            Il2CppObject *posObj = rm_call_obj0(rt, "get_anchoredPosition");
+            Il2CppObject *sizeObj = rm_call_obj0(rt, "get_sizeDelta");
+            if (posObj) {
+                tmplX = *(float *)((char *)posObj + 0x10);
+                tmplY = *(float *)((char *)posObj + 0x14);
+            }
+            if (sizeObj) {
+                tmplW = *(float *)((char *)sizeObj + 0x10);
+                tmplH = *(float *)((char *)sizeObj + 0x14);
+            }
+        }
+        const MethodInfo *mSetPos = il2cpp_class_get_method_from_name(gRectTransformClass, "set_anchoredPosition", 1);
+
         int added = 0;
         for (int k = 0; k < 3; k++) {
             void *instArgs[2] = {tmplGo, parentTr};
@@ -1430,6 +1448,17 @@ static void rm_append_custom_mods(void) {
             *(uint8_t *)((char *)comp + 0x98) = 0;       // isLocked
             *(uint8_t *)((char *)comp + 0xD8) = 0;       // onUnlockPopup
             *(void **)((char *)comp + 0xA8) = delegate;  // onClick
+
+            if (mSetPos && tmplW > 1 && tmplH > 1) {
+                Il2CppObject *tr2 = rm_call_obj0(comp, "get_transform");
+                if (tr2) {
+                    struct { float x, y; } p = { tmplX + (float)(k + 1) * (tmplW + 8),
+                                                 tmplY - (tmplH + 8) };
+                    Il2CppException *e3 = NULL;
+                    void *pargs[1] = {&p};
+                    il2cpp_runtime_invoke(mSetPos, tr2, pargs, &e3);
+                }
+            }
             added++;
         }
         gCustomModsOwner = mods;
