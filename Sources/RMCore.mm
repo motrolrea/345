@@ -388,6 +388,8 @@ static Il2CppClass *gObjectClass = NULL;
 static Il2CppClass *gOwnedItemClass = NULL;
 static Il2CppClass *gProductInfoClass = NULL;
 static Il2CppClass *gStringClass = NULL;
+static Il2CppClass *gTransformClass = NULL;
+static Il2CppClass *gRectTransformClass = NULL;
 
 static const MethodInfo *gFindTypeM2 = NULL;
 static const MethodInfo *gFindTypeM1 = NULL;
@@ -405,6 +407,8 @@ static void *gLevelCtlObj = NULL;
 static uint32_t gLevelCtlHandle = 0;
 static void *gSelectObj = NULL;
 static uint32_t gSelectHandle = 0;
+static void *gModsObj = NULL;
+static uint32_t gModsHandle = 0;
 
 static CFTimeInterval gLastFind = 0;
 static CFTimeInterval gLastApply = 0;
@@ -426,6 +430,8 @@ static void rm_setup_classes(void) {
     gOwnedItemClass = rm_find_class_any("OwnedItemInfo");
     gProductInfoClass = rm_find_class_any("RizlineProductInfo");
     gStringClass = rm_find_class_ns("System", "String");
+    gTransformClass = rm_find_class_ns("UnityEngine", "Transform");
+    gRectTransformClass = rm_find_class_ns("UnityEngine", "RectTransform");
 
     if (gObjectClass) {
         gFindTypeM2 = il2cpp_class_get_method_from_name(gObjectClass, "FindObjectOfType", 2);
@@ -486,6 +492,7 @@ static void rm_refresh_objects(void) {
     gWeeklyObj = rm_find_object(gWeeklyClass, &gWeeklyHandle);
     gLevelCtlObj = rm_find_object(gLevelCtlClass, &gLevelCtlHandle);
     gSelectObj = rm_find_object(gSelectClass, &gSelectHandle);
+    gModsObj = rm_find_object(gModsClass, &gModsHandle);
 
     if (!RMGameReady && (gSelectObj || gInfoObj)) {
         RMGameReady = true;
@@ -940,6 +947,10 @@ static int rm_sync_owned_products(void) {
     return synced;
 }
 
+static void rm_infer_track_id_affix(Il2CppObject **keys, int keyCount,
+                                    void **levelIds, int levelCount);
+static Il2CppString *rm_level_track_id(Il2CppString *levelId);
+
 static void rm_apply_unlock(void) {
     if (!RMUnlockAllSongs) {
         RMUnlockAllApplied = false;
@@ -983,6 +994,7 @@ static void rm_apply_unlock(void) {
     Il2CppObject **trackIDs = NULL;
     int trackCount = 0;
     rm_collect_track_ids(&trackIDs, &trackCount);
+    rm_infer_track_id_affix(trackIDs, trackCount, items, count);
     int itemAdded = 0;
     int trackAdded = 0;
     for (int i = 0; i < trackCount; i++) {
@@ -1009,9 +1021,15 @@ static void rm_apply_unlock(void) {
         }
         if (vip) rm_hashset_add(vip, sid);
         if (userLevels && !rm_list_contains(userLevels, sid)) rm_list_add(userLevels, sid);
-        // 商品表拿不到时，退化用关卡 id 直接补 item
-        if (trackCount == 0 && userItems && !rm_owned_has(userItems, sid)) {
-            if (rm_owned_add(userItems, sid)) itemAdded++;
+        // 关卡 id 本身 + 推断出前缀后的形式，都补进 getItems
+        if (userItems) {
+            if (!rm_owned_has(userItems, sid)) {
+                if (rm_owned_add(userItems, sid)) itemAdded++;
+            }
+            Il2CppString *altId = rm_level_track_id(sid);
+            if (altId && altId != sid && !rm_owned_has(userItems, altId)) {
+                if (rm_owned_add(userItems, altId)) itemAdded++;
+            }
         }
     }
 
@@ -1054,6 +1072,143 @@ static void rm_apply_unlock(void) {
         // 让选曲界面重新检查一次锁图标
         rm_call_static_void(gSelectClass, "RefreshAllPurchasableLocksGlobal");
     }
+}
+
+// ---------------------------------------------------------------------------
+// 曲目 id 形式推断
+//   LevelSelectControl.PlayLevel 里的判定是 TrackUnlocked(<固定串> + Level.id)，
+//   而 GetSongProductMap 的 key 不一定等于 Level.id。用两者对比推断出前后缀，
+//   之后补写 item 时就能给出 PlayLevel 真正要比对的那个字符串。
+// ---------------------------------------------------------------------------
+static NSString *gTrackIdPrefix = @"";
+static NSString *gTrackIdSuffix = @"";
+static BOOL gTrackIdAffixReady = NO;
+
+static void rm_infer_track_id_affix(Il2CppObject **keys, int keyCount,
+                                    void **levelIds, int levelCount) {
+    if (gTrackIdAffixReady || keyCount <= 0 || levelCount <= 0) return;
+    int limitKeys = MIN(keyCount, 300);
+    int limitLevels = MIN(levelCount, 400);
+    NSMutableDictionary<NSString *, NSNumber *> *counts = [NSMutableDictionary dictionary];
+    for (int i = 0; i < limitKeys; i++) {
+        NSString *k = rm_il2cpp_string_text((Il2CppString *)keys[i]);
+        if (k.length < 3 || k.length > 160) continue;
+        for (int j = 0; j < limitLevels; j++) {
+            NSString *lv = rm_il2cpp_string_text((Il2CppString *)levelIds[j]);
+            if (lv.length < 2 || lv.length >= k.length) continue;
+            if ([k hasSuffix:lv]) {
+                NSString *p = [@"P|" stringByAppendingString:[k substringToIndex:k.length - lv.length]];
+                counts[p] = @([counts[p] intValue] + 1);
+            } else if ([k hasPrefix:lv]) {
+                NSString *s = [@"S|" stringByAppendingString:[k substringFromIndex:lv.length]];
+                counts[s] = @([counts[s] intValue] + 1);
+            }
+        }
+    }
+    NSString *best = nil;
+    int bestCount = 0;
+    for (NSString *key in counts) {
+        int c = [counts[key] intValue];
+        if (c > bestCount) { bestCount = c; best = key; }
+    }
+    if (best.length > 2 && bestCount >= 3) {
+        if ([best hasPrefix:@"P|"]) gTrackIdPrefix = [best substringFromIndex:2];
+        else gTrackIdSuffix = [best substringFromIndex:2];
+    }
+    gTrackIdAffixReady = YES;
+    RMLog(@"曲目 id 形式: level.id %@%@%@（样本命中 %d）",
+          gTrackIdPrefix, @"<id>", gTrackIdSuffix, bestCount);
+}
+
+static Il2CppString *rm_level_track_id(Il2CppString *levelId) {
+    if (!levelId) return NULL;
+    if (gTrackIdPrefix.length == 0 && gTrackIdSuffix.length == 0) return levelId;
+    if (!il2cpp_string_new) return levelId;
+    NSString *lv = rm_il2cpp_string_text(levelId);
+    if (lv.length == 0) return levelId;
+    NSString *full = [NSString stringWithFormat:@"%@%@%@", gTrackIdPrefix, lv, gTrackIdSuffix];
+    return il2cpp_string_new(full.UTF8String);
+}
+
+// ---------------------------------------------------------------------------
+// 选曲界面「开始」按钮自愈
+//   PlayLevel 开头的两个拦截：
+//     previewControl.nowAudioSource.ClipLength < 0.1  → 直接 return（点了没反应）
+//     TrackUnlocked(前缀 + Level.id) == false        → 直接 return
+//   这里把两者都补齐，并把每次变化写进日志。
+// ---------------------------------------------------------------------------
+static NSString *gLastPlayProbe = nil;
+
+static void rm_watch_play_gate(void) {
+    if (!gSelectObj || RMInLevel) return;
+
+    void *sel = gSelectObj;
+    void *preview = *(void **)((char *)sel + 0x100);            // LevelSelectControl.previewControl
+    void *audio = preview ? *(void **)((char *)preview + 0x20) : NULL;   // PreviewControl.nowAudioSource
+    float clipLen = audio ? *(float *)((char *)audio + 0xB8) : -1.0f;    // AddressableAudioSource.ClipLength
+    void *level = *(void **)((char *)sel + 0x180);              // SelectedLevel
+    Il2CppString *levelId = level ? *(Il2CppString **)((char *)level + 0x10) : NULL;
+
+    if (audio && (!(clipLen >= 0.1f) || clipLen != clipLen)) {
+        *(float *)((char *)audio + 0xB8) = 60.0f;
+        RMLog(@"开始按钮: 预览音轨 ClipLength=%.2f，已补成 60", clipLen);
+    }
+
+    if (!levelId) return;
+
+    Il2CppString *trackId = rm_level_track_id(levelId);
+    BOOL unlocked = rm_track_unlocked(trackId);
+    Il2CppObject *user = rm_payment_user();
+    void *items = user ? *(void **)((char *)user + kOff_User_Items) : NULL;
+    if (!unlocked && items) {
+        if (rm_owned_add(items, trackId)) {
+            RMLog(@"开始按钮: 补写曲目 id %@", rm_il2cpp_string_text(trackId) ?: @"?");
+        }
+    }
+
+    uint8_t onPlay = *(uint8_t *)((char *)sel + 0x20C);
+    NSString *probe = [NSString stringWithFormat:@"选曲: level=%@ onPlay=%d clip=%.1f unlocked=%d",
+                       rm_il2cpp_string_text(levelId) ?: @"-", onPlay, clipLen, unlocked ? 1 : 0];
+    if (![probe isEqualToString:gLastPlayProbe]) {
+        gLastPlayProbe = probe;
+        RMLog(@"%@", probe);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 官方 Mods 面板位置（设置页 / 悬浮层把自定义开关贴在官方面板上）
+// ---------------------------------------------------------------------------
+BOOL RMModsPanelScreenRect(CGRect *outRect) {
+    if (!outRect || !gModsObj || !gModsClass) return NO;
+    const MethodInfo *mExpanded = il2cpp_class_get_method_from_name(gModsClass, "get_IsExpanded", 0);
+    if (!mExpanded) return NO;
+    Il2CppException *excExp = NULL;
+    Il2CppObject *expanded = il2cpp_runtime_invoke(mExpanded, NULL, NULL, &excExp);
+    if (excExp || !rm_boxed_bool(expanded)) return NO;
+
+    void *tr = rm_call_obj0(gModsObj, "get_transform");
+    if (!tr) return NO;
+    Il2CppObject *posObj = rm_call_obj0(tr, "get_position");
+    Il2CppObject *scaleObj = rm_call_obj0(tr, "get_lossyScale");
+    Il2CppObject *rectObj = rm_call_obj0(tr, "get_rect");
+    if (!posObj || !scaleObj || !rectObj) return NO;
+
+    float px = *(float *)((char *)posObj + 0x10);
+    float py = *(float *)((char *)posObj + 0x14);
+    float sx = *(float *)((char *)scaleObj + 0x10);
+    float sy = *(float *)((char *)scaleObj + 0x14);
+    float rw = *(float *)((char *)rectObj + 0x18);
+    float rh = *(float *)((char *)rectObj + 0x1C);
+    if (!(rw > 0) || !(rh > 0) || !(sx > 0) || !(sy > 0)) return NO;
+
+    CGSize screen = UIScreen.mainScreen.bounds.size;
+    CGFloat w = rw * sx;
+    CGFloat h = rh * sy;
+    CGRect r = CGRectMake(px - w / 2, screen.height - py - h / 2, w, h);
+    if (r.size.width < 40 || r.size.width > screen.width * 2) return NO;
+    if (r.origin.y < -600 || r.origin.y > screen.height + 600) return NO;
+    *outRect = r;
+    return YES;
 }
 
 // ---------------------------------------------------------------------------
@@ -1106,6 +1261,7 @@ static void rm_runtime_tick(void) {
     if (now - gLastApply > 0.5) {
         gLastApply = now;
         rm_apply_mods();
+        rm_watch_play_gate();
     }
 
     if (RMUnlockAllSongs && now - gLastUnlock > 5.0) {

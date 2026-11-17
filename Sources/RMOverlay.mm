@@ -184,6 +184,7 @@ static UIBezierPath *RMSlant(CGRect r, CGFloat ratio) {
 // 悬浮球
 // ---------------------------------------------------------------------------
 static void rm_open_panel(void);
+static void rm_setup_dock_window(UIWindowScene *scene);
 
 @interface RMBallView : UIView
 @end
@@ -859,6 +860,7 @@ void RMShowOverlay(void) {
             RMLog(@"悬浮球已创建");
         }
         RMUpdateBall();
+        rm_setup_dock_window(scene);
         if (!timerStarted) {
             timerStarted = YES;
             [NSTimer scheduledTimerWithTimeInterval:1.0 target:[RMBallTicker shared]
@@ -876,3 +878,194 @@ void RMShowOverlay(void) {
 }
 - (void)tick { rm_ball_tick(); }
 @end
+
+// ---------------------------------------------------------------------------
+// 官方 Mods 面板里的自定义开关（贴在同一块面板上，放不下就换行）
+// ---------------------------------------------------------------------------
+static NSArray<NSNumber *> *rm_dock_tags(void) {
+    return @[@(RMRowAutoPlay), @(RMRowNoBad), @(RMRowFreeHold),
+             @(RMRowLockHP), @(RMRowUnlockAll), @(RMRowBallShow)];
+}
+
+static NSArray<NSString *> *rm_dock_titles(void) {
+    return @[@"自动", @"无Bad", @"自由", @"锁血", @"解锁", @"球"];
+}
+
+static BOOL rm_dock_get(NSInteger tag) {
+    switch (tag) {
+        case RMRowAutoPlay: return RMAutoPlay;
+        case RMRowNoBad: return RMNoBad;
+        case RMRowFreeHold: return RMFreeHold;
+        case RMRowLockHP: return RMLockHP;
+        case RMRowUnlockAll: return RMUnlockAllSongs;
+        case RMRowBallShow: return RMBallVisible;
+        default: return NO;
+    }
+}
+
+static void rm_dock_set(NSInteger tag, BOOL on) {
+    switch (tag) {
+        case RMRowAutoPlay: RMAutoPlay = on; break;
+        case RMRowNoBad: RMNoBad = on; break;
+        case RMRowFreeHold: RMFreeHold = on; break;
+        case RMRowLockHP: RMLockHP = on; break;
+        case RMRowUnlockAll: RMUnlockAllSongs = on; break;
+        case RMRowBallShow: RMBallVisible = on; break;
+        default: break;
+    }
+    NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
+    [d setBool:RMAutoPlay forKey:@"rm.auto"];
+    [d setBool:RMNoBad forKey:@"rm.nobad"];
+    [d setBool:RMFreeHold forKey:@"rm.freehold"];
+    [d setBool:RMLockHP forKey:@"rm.hp"];
+    [d setBool:RMUnlockAllSongs forKey:@"rm.unlock"];
+    [d setBool:RMBallVisible forKey:@"rm.ball.show"];
+    RMApplySettingsNow();
+    RMUpdateBall();
+}
+
+@interface RMModsDockView : UIView
+- (void)refreshStates;
+- (void)applyWidth:(CGFloat)width;
+- (CGFloat)heightForWidth:(CGFloat)width;
+- (NSInteger)perRowForWidth:(CGFloat)width;
+@end
+
+@implementation RMModsDockView {
+    NSMutableArray<UIButton *> *_chips;
+}
+
+- (instancetype)initWithFrame:(CGRect)frame {
+    if ((self = [super initWithFrame:frame])) {
+        self.backgroundColor = UIColor.clearColor;
+        _chips = [NSMutableArray array];
+        NSArray<NSNumber *> *tags = rm_dock_tags();
+        NSArray<NSString *> *titles = rm_dock_titles();
+        for (NSInteger i = 0; i < tags.count; i++) {
+            UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
+            b.tag = tags[i].integerValue;
+            b.titleLabel.font = [UIFont boldSystemFontOfSize:11];
+            b.titleLabel.adjustsFontSizeToFitWidth = YES;
+            b.titleLabel.minimumScaleFactor = 0.7;
+            b.layer.cornerRadius = 7;
+            b.layer.masksToBounds = YES;
+            b.layer.borderWidth = 1.0 / UIScreen.mainScreen.scale;
+            [b setTitle:titles[i] forState:UIControlStateNormal];
+            [b addTarget:self action:@selector(onChip:) forControlEvents:UIControlEventTouchUpInside];
+            [self addSubview:b];
+            [_chips addObject:b];
+        }
+        [self refreshStates];
+    }
+    return self;
+}
+
+- (void)onChip:(UIButton *)sender {
+    rm_dock_set(sender.tag, !rm_dock_get(sender.tag));
+    [self refreshStates];
+}
+
+- (void)refreshStates {
+    for (UIButton *b in _chips) {
+        BOOL on = rm_dock_get(b.tag);
+        UIColor *fill = on ? RMAccentColor() : [UIColor colorWithWhite:0 alpha:0.45];
+        b.backgroundColor = fill;
+        b.layer.borderColor = [UIColor colorWithWhite:1 alpha:on ? 0.9 : 0.35].CGColor;
+        [b setTitleColor:(on ? UIColor.blackColor : [UIColor colorWithWhite:1 alpha:0.85])
+                forState:UIControlStateNormal];
+    }
+}
+
+- (NSInteger)perRowForWidth:(CGFloat)width {
+    CGFloat chipMin = 52, gap = 6;
+    NSInteger perRow = (NSInteger)((width + gap) / (chipMin + gap));
+    if (perRow < 1) perRow = 1;
+    if (perRow > (NSInteger)_chips.count) perRow = (NSInteger)_chips.count;
+    return perRow;
+}
+
+- (CGFloat)heightForWidth:(CGFloat)width {
+    NSInteger rows = (_chips.count + [self perRowForWidth:width] - 1) / [self perRowForWidth:width];
+    return rows * 28 + (rows - 1) * 6;
+}
+
+- (void)applyWidth:(CGFloat)width {
+    CGFloat gap = 6;
+    NSInteger perRow = [self perRowForWidth:width];
+    CGFloat chipW = (width - gap * (perRow - 1)) / perRow;
+    for (NSInteger i = 0; i < (NSInteger)_chips.count; i++) {
+        NSInteger row = i / perRow;
+        NSInteger col = i % perRow;
+        _chips[i].frame = CGRectMake(col * (chipW + gap), row * 34, chipW, 28);
+    }
+    self.frame = CGRectMake(0, 0, width, [self heightForWidth:width]);
+}
+
+@end
+
+static UIWindow *gDockWindow = nil;
+
+static void rm_update_dock(void) {
+    if (!gDockWindow) return;
+    if (gPanelWindow || rm_in_gameplay()) {
+        gDockWindow.hidden = YES;
+        return;
+    }
+    CGRect panel = CGRectZero;
+    if (!RMModsPanelScreenRect(&panel)) {
+        gDockWindow.hidden = YES;
+        return;
+    }
+    UIWindowScene *scene = rm_active_scene();
+    CGRect sb = scene ? scene.coordinateSpace.bounds : UIScreen.mainScreen.bounds;
+    CGFloat width = MAX(180, MIN(panel.size.width, sb.size.width - 24));
+    RMModsDockView *dock = (RMModsDockView *)gDockWindow.rootViewController.view.subviews.firstObject;
+    if (!dock) return;
+    [dock applyWidth:width];
+    CGFloat h = dock.bounds.size.height;
+
+    CGFloat x = MAX(12, MIN(sb.size.width - width - 12, CGRectGetMidX(panel) - width / 2));
+    CGFloat below = CGRectGetMaxY(panel) + 6;
+    CGFloat above = CGRectGetMinY(panel) - h - 6;
+    CGFloat y = below;
+    if (below + h > sb.size.height - 12) y = MAX(80, above);
+    gDockWindow.frame = CGRectMake(x, y, width, h);
+    [dock refreshStates];
+    gDockWindow.hidden = NO;
+    static CGRect logged = {0, 0, 0, 0};
+    if (fabs(logged.origin.x - x) > 1 || fabs(logged.origin.y - y) > 1 ||
+        fabs(logged.size.width - width) > 1) {
+        logged = CGRectMake(x, y, width, h);
+        RMLog(@"Mods 面板: 面板区域 (%.0f,%.0f,%.0f,%.0f) → 自定义行 (%.0f,%.0f,%.0f,%.0f)",
+              panel.origin.x, panel.origin.y, panel.size.width, panel.size.height, x, y, width, h);
+    }
+}
+
+@interface RMModsDockTicker : NSObject
++ (instancetype)shared;
+@end
+
+@implementation RMModsDockTicker
++ (instancetype)shared {
+    static RMModsDockTicker *t = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ t = [RMModsDockTicker new]; });
+    return t;
+}
+- (void)tick { rm_update_dock(); }
+@end
+
+static void rm_setup_dock_window(UIWindowScene *scene) {
+    if (gDockWindow) return;
+    gDockWindow = [[UIWindow alloc] initWithWindowScene:scene];
+    gDockWindow.windowLevel = UIWindowLevelAlert + 1;
+    gDockWindow.backgroundColor = UIColor.clearColor;
+    UIViewController *root = [UIViewController new];
+    root.view.backgroundColor = UIColor.clearColor;
+    RMModsDockView *dock = [[RMModsDockView alloc] initWithFrame:CGRectMake(0, 0, 320, 28)];
+    [root.view addSubview:dock];
+    gDockWindow.rootViewController = root;
+    gDockWindow.hidden = YES;
+    [NSTimer scheduledTimerWithTimeInterval:0.25 target:[RMModsDockTicker shared]
+                                   selector:@selector(tick) userInfo:nil repeats:YES];
+}

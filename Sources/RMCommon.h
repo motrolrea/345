@@ -45,6 +45,9 @@ void RMStartRuntimeFeatures(void);
 void RMShowOverlay(void);
 void RMUpdateBall(void);
 
+// 官方 Mods 面板当前的屏幕区域（Unity 坐标换算成 UIKit 坐标）；面板收起时返回 NO
+BOOL RMModsPanelScreenRect(CGRect *outRect);
+
 #ifdef __cplusplus
 }
 #endif
