@@ -1456,9 +1456,8 @@ static void rm_append_custom_mods(void) {
             if (mSetPos && tmplW > 1 && tmplH > 1) {
                 Il2CppObject *tr2 = rm_call_obj0(comp, "get_transform");
                 if (tr2) {
-                    // 放到官方那排的正上方一行（下面被面板遮罩裁掉的可能性更大）
-                    struct { float x, y; } p = { tmplX - (float)(k + 1) * (tmplW + 8),
-                                                 tmplY + tmplH + 8 };
+                    // 和官方按钮同一行，排在最后一个按钮右边
+                    struct { float x, y; } p = { tmplX + (float)(k + 1) * (tmplW + 8), tmplY };
                     Il2CppException *e3 = NULL;
                     void *pargs[1] = {&p};
                     il2cpp_runtime_invoke(mSetPos, tr2, pargs, &e3);
@@ -1470,6 +1469,12 @@ static void rm_append_custom_mods(void) {
                 void *sargs[1] = {&yes};
                 Il2CppException *e4 = NULL;
                 il2cpp_runtime_invoke(mSetActive, cloneGo, sargs, &e4);
+            }
+            // 克隆体继承的是“收起”状态（灰色圆球），调 Expand() 让它变成正常图标
+            const MethodInfo *mExpand = il2cpp_class_get_method_from_name(gModBtnClass, "Expand", 0);
+            if (mExpand) {
+                Il2CppException *e5 = NULL;
+                il2cpp_runtime_invoke(mExpand, comp, NULL, &e5);
             }
             if (k == 0) {
                 Il2CppObject *tr3 = rm_call_obj0(comp, "get_transform");
