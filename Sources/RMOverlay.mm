@@ -1007,28 +1007,26 @@ static UIWindow *gDockWindow = nil;
 
 static void rm_update_dock(void) {
     if (!gDockWindow) return;
-    if (gPanelWindow || rm_in_gameplay()) {
-        gDockWindow.hidden = YES;
-        return;
-    }
-    CGRect panel = CGRectZero;
-    if (!RMModsPanelScreenRect(&panel)) {
+    BOOL gameplay = rm_in_gameplay();
+    BOOL show = !gPanelWindow && gBallWindow && !gBallWindow.hidden &&
+                !(RMAutoHideInGame && gameplay);
+    if (!show) {
         gDockWindow.hidden = YES;
         return;
     }
     UIWindowScene *scene = rm_active_scene();
     CGRect sb = scene ? scene.coordinateSpace.bounds : UIScreen.mainScreen.bounds;
-    CGFloat width = MAX(180, MIN(panel.size.width, sb.size.width - 24));
+    CGRect ball = gBallWindow.frame;
+    CGFloat width = 200;
     RMModsDockView *dock = (RMModsDockView *)gDockWindow.rootViewController.view.subviews.firstObject;
     if (!dock) return;
     [dock applyWidth:width];
     CGFloat h = dock.bounds.size.height;
 
-    CGFloat x = MAX(12, MIN(sb.size.width - width - 12, CGRectGetMidX(panel) - width / 2));
-    CGFloat below = CGRectGetMaxY(panel) + 6;
-    CGFloat above = CGRectGetMinY(panel) - h - 6;
-    CGFloat y = below;
-    if (below + h > sb.size.height - 12) y = MAX(80, above);
+    CGFloat x = MAX(8, MIN(sb.size.width - width - 8, ball.origin.x));
+    CGFloat y = CGRectGetMaxY(ball) + 8;
+    if (y + h > sb.size.height - 8) y = ball.origin.y - h - 8;
+    y = MAX(24, y);
     gDockWindow.frame = CGRectMake(x, y, width, h);
     [dock refreshStates];
     gDockWindow.hidden = NO;
@@ -1036,8 +1034,7 @@ static void rm_update_dock(void) {
     if (fabs(logged.origin.x - x) > 1 || fabs(logged.origin.y - y) > 1 ||
         fabs(logged.size.width - width) > 1) {
         logged = CGRectMake(x, y, width, h);
-        RMLog(@"Mods 面板: 面板区域 (%.0f,%.0f,%.0f,%.0f) → 自定义行 (%.0f,%.0f,%.0f,%.0f)",
-              panel.origin.x, panel.origin.y, panel.size.width, panel.size.height, x, y, width, h);
+        RMLog(@"Mods 快捷条: (%.0f,%.0f,%.0f,%.0f)", x, y, width, h);
     }
 }
 

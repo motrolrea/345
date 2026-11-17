@@ -1176,6 +1176,58 @@ static Il2CppString *rm_level_track_id(Il2CppString *levelId) {
 //   这里把两者都补齐，并把每次变化写进日志。
 // ---------------------------------------------------------------------------
 static NSString *gLastPlayProbe = nil;
+static int gLastDiscId = -1;
+static CFTimeInterval gDiscSwitchUntil = 0;
+
+// Disc 切换时会预热/加载整张盘的面板，这段时间不做解锁写入，避免和它抢主线程
+static void rm_watch_disc_change(void) {
+    if (!gSelectObj) return;
+    int disc = *(int *)((char *)gSelectObj + 0x1B8);   // LevelSelectControl.selectedDiscId
+    if (disc != gLastDiscId) {
+        gLastDiscId = disc;
+        gDiscSwitchUntil = CFAbsoluteTimeGetCurrent() + 3.0;
+        RMLog(@"切换 Disc: %d", disc);
+    }
+}
+
+// 一次性的存储诊断：确认歌曲资源到底有没有下载到本地
+static void rm_log_storage_once(void) {
+    static BOOL done = NO;
+    if (done) return;
+    done = YES;
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSArray<NSString *> *bases = @[
+        NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject ?: @"",
+        [NSSearchPathForDirectoriesInDomains(NSLibraryDirectory, NSUserDomainMask, YES).firstObject
+            stringByAppendingPathComponent:@"Application Support"] ?: @"",
+    ];
+    NSMutableString *out = [NSMutableString string];
+    for (NSString *base in bases) {
+        if (base.length == 0) continue;
+        NSArray<NSString *> *subs = [fm contentsOfDirectoryAtPath:base error:NULL];
+        unsigned long long total = 0;
+        NSMutableArray<NSString *> *parts = [NSMutableArray array];
+        for (NSString *s in subs) {
+            NSString *full = [base stringByAppendingPathComponent:s];
+            unsigned long long sz = 0;
+            NSDictionary *attrs = [fm attributesOfItemAtPath:full error:NULL];
+            if ([attrs[NSFileType] isEqualToString:NSFileTypeDirectory]) {
+                NSArray *inner = [fm subpathsAtPath:full];
+                for (NSString *f in inner) {
+                    NSDictionary *a = [fm attributesOfItemAtPath:[full stringByAppendingPathComponent:f] error:NULL];
+                    sz += [a[NSFileSize] unsignedLongLongValue];
+                }
+            } else {
+                sz = [attrs[NSFileSize] unsignedLongLongValue];
+            }
+            total += sz;
+            if (sz > 1024 * 1024) [parts addObject:[NSString stringWithFormat:@"%@=%.0fMB", s, sz / 1048576.0]];
+        }
+        [out appendFormat:@"%@ 合计 %.0fMB [%@]；", base.lastPathComponent, total / 1048576.0,
+                          [parts componentsJoinedByString:@", "]];
+    }
+    RMLog(@"存储: %@", out.length ? out : @"(空)");
+}
 
 static void rm_watch_play_gate(void) {
     if (!gSelectObj || RMInLevel) return;
@@ -1350,6 +1402,8 @@ static void rm_runtime_tick(void) {
 
     if (!RMGameReady) return;
 
+    rm_log_storage_once();
+    rm_watch_disc_change();
     rm_pin_life_fast();
 
     if (now - gLastApply > 0.5) {
@@ -1358,7 +1412,7 @@ static void rm_runtime_tick(void) {
         rm_watch_play_gate();
     }
 
-    if (RMUnlockAllSongs && now - gLastUnlock > 5.0) {
+    if (RMUnlockAllSongs && now - gLastUnlock > 5.0 && now > gDiscSwitchUntil) {
         gLastUnlock = now;
         if (!gLevelCtlObj) rm_refresh_objects();
         rm_apply_unlock();
