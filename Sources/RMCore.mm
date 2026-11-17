@@ -386,6 +386,7 @@ static Il2CppClass *gModsClass = NULL;
 static Il2CppClass *gSelectClass = NULL;
 static Il2CppClass *gObjectClass = NULL;
 static Il2CppClass *gOwnedItemClass = NULL;
+static Il2CppClass *gProductInfoClass = NULL;
 static Il2CppClass *gStringClass = NULL;
 
 static const MethodInfo *gFindTypeM2 = NULL;
@@ -423,6 +424,7 @@ static void rm_setup_classes(void) {
     gSelectClass = rm_find_class_any("LevelSelectControl");
     gObjectClass = rm_find_class_ns("UnityEngine", "Object");
     gOwnedItemClass = rm_find_class_any("OwnedItemInfo");
+    gProductInfoClass = rm_find_class_any("RizlineProductInfo");
     gStringClass = rm_find_class_ns("System", "String");
 
     if (gObjectClass) {
@@ -882,6 +884,62 @@ static bool rm_track_unlocked(Il2CppString *trackId) {
     return !exc && rm_boxed_bool(r);
 }
 
+// 选曲界面锁图标查的是 PaymentService.OwnedProduct(int itemId)，
+// 它读静态 ownedProducts 字典（登录时由 User.getItems 派生），写 getItems 不会同步过去。
+// 所以按 GetSongProductMap() 的 value.id 调 SetOwnedProductCount 补齐，并触发一次刷新。
+static int rm_owned_product_count(int productId) {
+    if (!gPaymentClass) return 0;
+    const MethodInfo *m = il2cpp_class_get_method_from_name(gPaymentClass, "GetOwnedProductCount", 1);
+    if (!m) return 0;
+    void *args[1] = {&productId};
+    Il2CppException *exc = NULL;
+    Il2CppObject *r = il2cpp_runtime_invoke(m, NULL, args, &exc);
+    return exc ? 0 : rm_boxed_int(r);
+}
+
+static int rm_sync_owned_products(void) {
+    if (!gPaymentClass || !gProductInfoClass || !il2cpp_array_new) return 0;
+    const MethodInfo *mMap = il2cpp_class_get_method_from_name(gPaymentClass, "GetSongProductMap", 0);
+    if (!mMap) return 0;
+    Il2CppException *exc = NULL;
+    Il2CppObject *map = il2cpp_runtime_invoke(mMap, NULL, NULL, &exc);
+    if (!map || exc) return 0;
+
+    Il2CppObject *values = rm_call_obj0(map, "get_Values");
+    int n = rm_call_int0(values, "get_Count");
+    if (!values || n <= 0 || n > 5000) return 0;
+
+    Il2CppArray *arr = il2cpp_array_new(gProductInfoClass, (size_t)n);
+    if (!arr) return 0;
+    const MethodInfo *mCopy = il2cpp_class_get_method_from_name(
+        il2cpp_object_get_class((Il2CppObject *)values), "CopyTo", 2);
+    if (!mCopy) return 0;
+    int zero = 0;
+    void *copyArgs[2] = {arr, &zero};
+    Il2CppException *exc2 = NULL;
+    il2cpp_runtime_invoke(mCopy, values, copyArgs, &exc2);
+    if (exc2) return 0;
+
+    const MethodInfo *mSet = il2cpp_class_get_method_from_name(gPaymentClass, "SetOwnedProductCount", 2);
+    if (!mSet) return 0;
+
+    int synced = 0;
+    void **elems = (void **)((char *)arr + kOff_Array_Elements);
+    for (int i = 0; i < n; i++) {
+        void *pi = elems[i];
+        if (!pi) continue;
+        int pid = *(int *)((char *)pi + 0x10);   // RizlineProductInfo.id
+        if (pid <= 0) continue;
+        if (rm_owned_product_count(pid) > 0) continue;   // 已有就不重复写，避免反复触发监听
+        int one = 1;
+        void *args[2] = {&pid, &one};
+        Il2CppException *e3 = NULL;
+        il2cpp_runtime_invoke(mSet, NULL, args, &e3);
+        if (!e3) synced++;
+    }
+    return synced;
+}
+
 static void rm_apply_unlock(void) {
     if (!RMUnlockAllSongs) {
         RMUnlockAllApplied = false;
@@ -983,15 +1041,16 @@ static void rm_apply_unlock(void) {
 
     RMLastLevelIdCount = count;
     RMUnlockAllApplied = true;
-    if (added + trackAdded + itemAdded > 0) {
+    int productAdded = rm_sync_owned_products();
+    if (added + trackAdded + itemAdded + productAdded > 0) {
         static BOOL verified = NO;
         bool ok = false;
         if (!verified && trackCount > 0 && trackIDs[0]) {
             verified = YES;
             ok = rm_track_unlocked((Il2CppString *)trackIDs[0]);
         }
-        RMLog(@"全曲解锁: 关卡 %d，曲目 id %d，新增 item %d / ownedTracks %d（TrackUnlocked 校验=%d）",
-              count, trackCount, itemAdded, trackAdded + added, ok ? 1 : 0);
+        RMLog(@"全曲解锁: 关卡 %d，曲目 id %d，新增 item %d / ownedTracks %d / 商品 %d（TrackUnlocked 校验=%d）",
+              count, trackCount, itemAdded, trackAdded + added, productAdded, ok ? 1 : 0);
         // 让选曲界面重新检查一次锁图标
         rm_call_static_void(gSelectClass, "RefreshAllPurchasableLocksGlobal");
     }
