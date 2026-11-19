@@ -1901,8 +1901,10 @@ static void rm_runtime_tick(void) {
         gLastModUnlock = now;
         if (!RMInLevel) {
             rm_unlock_mod_buttons();
-            rm_hijack_mod_buttons();
-            rm_refresh_hijacked_visuals();
+            // 按钮替换先停用：会把官方按钮颜色改成白色，且与官方原本的
+            // 生命条等功能叠加（三重效果），先回滚保证稳定
+            // rm_hijack_mod_buttons();
+            // rm_refresh_hijacked_visuals();
         }
     }
 
