@@ -385,6 +385,7 @@ static Il2CppClass *gLevelCtlClass = NULL;
 static Il2CppClass *gPaymentClass = NULL;
 static Il2CppClass *gModsClass = NULL;
 static Il2CppClass *gModBtnClass = NULL;
+static Il2CppClass *gPurchClass = NULL;
 static Il2CppClass *gSelectClass = NULL;
 static Il2CppClass *gObjectClass = NULL;
 static Il2CppClass *gGoClass = NULL;
@@ -431,6 +432,7 @@ static void rm_setup_classes(void) {
     gPaymentClass = rm_find_class_any("PaymentService");
     gModsClass = rm_find_class_any("ModsControl");
     gModBtnClass = rm_find_class_any("ModButtonControl");
+    gPurchClass = rm_find_class_any("PurchasableSongControl");
     gSelectClass = rm_find_class_any("LevelSelectControl");
     gObjectClass = rm_find_class_ns("UnityEngine", "Object");
     gGoClass = rm_find_class_ns("UnityEngine", "GameObject");
@@ -1238,6 +1240,41 @@ static void rm_log_storage_once(void) {
     RMLog(@"存储: %@", out.length ? out : @"(空)");
 }
 
+// 探测：选曲页上的 PurchasableSongControl 到底卡在哪个值（价格 / 已购 / 商品 id / 是否拥有）
+static NSString *gLastPurchProbe = nil;
+
+static void rm_probe_purchase(void) {
+    if (!gPurchClass || !gFindObjectsM1 || !il2cpp_class_get_type || !il2cpp_type_get_object) return;
+    Il2CppType *t = il2cpp_class_get_type(gPurchClass);
+    void *tObj = t ? il2cpp_type_get_object(t) : NULL;
+    if (!tObj) return;
+    Il2CppException *exc = NULL;
+    void *args[1] = {tObj};
+    Il2CppObject *arr = il2cpp_runtime_invoke(gFindObjectsM1, NULL, args, &exc);
+    if (exc || !arr) return;
+    NSUInteger n = rm_array_count(arr);
+    if (n == 0 || n > 256) return;
+    void **e = (void **)((char *)arr + kOff_Array_Elements);
+    NSMutableString *s = [NSMutableString string];
+    for (NSUInteger i = 0; i < n && s.length < 400; i++) {
+        void *o = e[i];
+        if (!o) continue;
+        void *tr = rm_call_obj0(o, "get_transform");
+        void *go = tr ? rm_call_obj0(tr, "get_gameObject") : NULL;
+        if (!go || !rm_boxed_bool(rm_call_obj0(go, "get_activeInHierarchy"))) continue;
+        int price = *(int *)((char *)o + 0x50);
+        uint8_t paid = *(uint8_t *)((char *)o + 0x54);
+        void *prod = *(void **)((char *)o + 0x68);
+        int pid = prod ? *(int *)((char *)prod + 0x10) : -1;
+        BOOL owned = pid > 0 ? rm_owned_product_count(pid) > 0 : NO;
+        [s appendFormat:@"[id=%d price=%d paid=%d owned=%d] ", pid, price, paid, owned ? 1 : 0];
+    }
+    if (s.length && ![s isEqualToString:gLastPurchProbe]) {
+        gLastPurchProbe = s;
+        RMLog(@"商店探测: %@", s);
+    }
+}
+
 static void rm_watch_play_gate(void) {
     if (!gSelectObj || RMInLevel) return;
 
@@ -1294,6 +1331,8 @@ static void rm_watch_play_gate(void) {
             }
         }
     }
+
+    rm_probe_purchase();
 
     uint8_t onPlay = *(uint8_t *)((char *)sel + 0x20C);
     NSString *probe = [NSString stringWithFormat:
@@ -1586,6 +1625,40 @@ static void rm_hijack_mod_buttons(void) {
     }
 }
 
+static void rm_image_set_color(void *img, float r, float g, float b, float a) {
+    if (!img) return;
+    Il2CppClass *k = il2cpp_object_get_class((Il2CppObject *)img);
+    const MethodInfo *m = k ? il2cpp_class_get_method_from_name(k, "set_color", 1) : NULL;
+    if (!m) return;
+    float c[4] = {r, g, b, a};
+    void *args[1] = {c};
+    Il2CppException *e = NULL;
+    il2cpp_runtime_invoke(m, img, args, &e);
+}
+
+// 让被替换的两个官方按钮的图标颜色跟着开关变，至少能看出状态
+static void rm_refresh_hijacked_visuals(void) {
+    if (!gHijackedMods) return;
+    void *buttons = *(void **)((char *)gHijackedMods + 0xD8);
+    int count = buttons ? (int)rm_array_count(buttons) : 0;
+    if (count < 7) return;
+    void **b = (void **)((char *)buttons + kOff_Array_Elements);
+    void *demo = b[5];
+    void *life = b[1];
+    if (demo) {
+        rm_image_set_color(*(void **)((char *)demo + 0x30),
+                           RMAutoPlay ? 0.40f : 1.0f,
+                           RMAutoPlay ? 0.95f : 1.0f,
+                           RMAutoPlay ? 0.60f : 1.0f, 1.0f);
+    }
+    if (life) {
+        rm_image_set_color(*(void **)((char *)life + 0x30),
+                           RMLockHP ? 1.0f : 1.0f,
+                           RMLockHP ? 0.35f : 1.0f,
+                           RMLockHP ? 0.35f : 1.0f, 1.0f);
+    }
+}
+
 
 BOOL RMModsPanelPresent(void) {
     if (!gModsClass || !gFindObjectsM1 || !il2cpp_class_get_type || !il2cpp_type_get_object) return NO;
@@ -1723,6 +1796,7 @@ static void rm_runtime_tick(void) {
         if (!RMInLevel) {
             rm_unlock_mod_buttons();
             rm_hijack_mod_buttons();
+            rm_refresh_hijacked_visuals();
         }
     }
 
