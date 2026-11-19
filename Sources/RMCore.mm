@@ -1264,6 +1264,8 @@ static void rm_probe_purchase(void) {
     void **e = (void **)((char *)arr + kOff_Array_Elements);
     NSMutableString *s = [NSMutableString string];
     int addedCount = 0;
+    int refreshed = 0;
+    const MethodInfo *mCheck = il2cpp_class_get_method_from_name(gPurchClass, "CheckIfAlreadyUnlocked", 0);
     for (NSUInteger i = 0; i < n && s.length < 400; i++) {
         void *o = e[i];
         if (!o) continue;
@@ -1275,6 +1277,12 @@ static void rm_probe_purchase(void) {
         // 歌曲商品 id 不一定在 PaymentService.products 里，按界面上的实际 id 补齐
         if (pid > 0 && !owned) {
             if (rm_set_owned_product(pid)) { owned = YES; addedCount++; }
+        }
+        // 按新的拥有状态重画这个锁图标 / 价格条（解锁 → 开始）
+        if (owned && mCheck) {
+            Il2CppException *e1 = NULL;
+            il2cpp_runtime_invoke(mCheck, o, NULL, &e1);
+            if (!e1) refreshed++;
         }
         void *tr = rm_call_obj0(o, "get_transform");
         void *go = tr ? rm_call_obj0(tr, "get_gameObject") : NULL;
