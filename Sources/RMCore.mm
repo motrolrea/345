@@ -1581,6 +1581,22 @@ static void rm_append_custom_mods(void) {
 // ---------------------------------------------------------------------------
 static void *gHijackedMods = NULL;
 
+// 把 src 按钮当前显示的图标复制到 dst 按钮上
+static void rm_copy_image_sprite(void *dst, void *src) {
+    if (!dst || !src) return;
+    void *dstImg = *(void **)((char *)dst + 0x30);
+    void *srcImg = *(void **)((char *)src + 0x30);
+    if (!dstImg || !srcImg) return;
+    Il2CppObject *spr = rm_call_obj0(srcImg, "get_sprite");
+    if (!spr) return;
+    Il2CppClass *k = il2cpp_object_get_class((Il2CppObject *)dstImg);
+    const MethodInfo *m = k ? il2cpp_class_get_method_from_name(k, "set_sprite", 1) : NULL;
+    if (!m) return;
+    void *args[1] = {spr};
+    Il2CppException *e = NULL;
+    il2cpp_runtime_invoke(m, dstImg, args, &e);
+}
+
 static void rm_hijack_mod_buttons(void) {
     if (!gModsClass || !gModBtnClass || !gFindObjectsM1) return;
     Il2CppType *mt = il2cpp_class_get_type(gModsClass);
@@ -1619,6 +1635,9 @@ static void rm_hijack_mod_buttons(void) {
         *(int *)((char *)life + 0x70) = 201;
         *(void **)((char *)life + 0xA8) = d;
         *(uint8_t *)((char *)life + 0x98) = 0;
+        // 换图标，方便和原来的“自动演示 / 生命条”区分
+        rm_copy_image_sprite(demo, b[0]);   // 借用镜像按钮的图标
+        rm_copy_image_sprite(life, b[3]);   // 借用边框按钮的图标
         gHijackedMods = mods;
         RMLog(@"官方 Mod 按钮已替换: 自动演示→自动游玩，生命条→锁血");
         return;
