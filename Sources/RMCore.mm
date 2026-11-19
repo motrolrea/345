@@ -1655,8 +1655,9 @@ static void rm_runtime_tick(void) {
 
     if (now - gLastModUnlock > 2.0) {
         gLastModUnlock = now;
-        rm_unlock_mod_buttons();
-        rm_append_custom_mods();
+        if (!RMInLevel) rm_unlock_mod_buttons();
+        // 自定义克隆按钮先停用：它会在官方面板里留一个灰色圆球，且结算有概率闪退
+        // rm_append_custom_mods();
     }
 
     static CFTimeInterval lastBeat = 0;
@@ -1665,7 +1666,10 @@ static void rm_runtime_tick(void) {
         RMLog(@"心跳: 主线程正常 inLevel=%d disc=%d", RMInLevel ? 1 : 0, gLastDiscId);
     }
 
-    if (RMUnlockAllSongs && now - gLastUnlock > 5.0 && now > gDiscSwitchUntil) {
+    // 结算期间和刚出关的几秒内不做解锁写入，避免和存档/结算抢数据
+    double sincePlay = CFAbsoluteTimeGetCurrent() - RMLastGameplayTick;
+    if (RMUnlockAllSongs && now - gLastUnlock > 5.0 && now > gDiscSwitchUntil &&
+        !RMInLevel && sincePlay > 6.0) {
         gLastUnlock = now;
         if (!gLevelCtlObj) rm_refresh_objects();
         rm_apply_unlock();
