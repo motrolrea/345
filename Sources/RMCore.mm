@@ -1263,18 +1263,27 @@ static void rm_probe_purchase(void) {
     if (n == 0 || n > 256) return;
     void **e = (void **)((char *)arr + kOff_Array_Elements);
     NSMutableString *s = [NSMutableString string];
+    int addedCount = 0;
     for (NSUInteger i = 0; i < n && s.length < 400; i++) {
         void *o = e[i];
         if (!o) continue;
-        void *tr = rm_call_obj0(o, "get_transform");
-        void *go = tr ? rm_call_obj0(tr, "get_gameObject") : NULL;
-        if (!go || !rm_boxed_bool(rm_call_obj0(go, "get_activeInHierarchy"))) continue;
         int price = *(int *)((char *)o + 0x50);
         uint8_t paid = *(uint8_t *)((char *)o + 0x54);
         void *prod = *(void **)((char *)o + 0x68);
         int pid = prod ? *(int *)((char *)prod + 0x10) : -1;
         BOOL owned = pid > 0 ? rm_owned_product_count(pid) > 0 : NO;
+        // 歌曲商品 id 不一定在 PaymentService.products 里，按界面上的实际 id 补齐
+        if (pid > 0 && !owned) {
+            if (rm_set_owned_product(pid)) { owned = YES; addedCount++; }
+        }
+        void *tr = rm_call_obj0(o, "get_transform");
+        void *go = tr ? rm_call_obj0(tr, "get_gameObject") : NULL;
+        if (!go || !rm_boxed_bool(rm_call_obj0(go, "get_activeInHierarchy"))) continue;
         [s appendFormat:@"[id=%d price=%d paid=%d owned=%d] ", pid, price, paid, owned ? 1 : 0];
+    }
+    if (addedCount > 0) {
+        RMLog(@"商店: 按界面补写 %d 个歌曲商品拥有", addedCount);
+        rm_call_static_void(gSelectClass, "RefreshAllPurchasableLocksGlobal");
     }
     if (s.length && ![s isEqualToString:gLastPurchProbe]) {
         gLastPurchProbe = s;
@@ -1719,9 +1728,9 @@ static void rm_hijack_mod_buttons(void) {
         *(int *)((char *)life + 0x70) = 201;
         *(void **)((char *)life + 0xA8) = d;
         *(uint8_t *)((char *)life + 0x98) = 0;
-        // 用现场生成的原创图标（绿底播放三角 / 红底心形）
-        rm_set_image_sprite(demo, rm_make_icon_sprite(0));
-        rm_set_image_sprite(life, rm_make_icon_sprite(1));
+        // 图标先借用另外两个官方 sprite（生成的贴图在部分 UI 材质上不显示）
+        rm_copy_image_sprite(demo, b[0]);
+        rm_copy_image_sprite(life, b[3]);
         gHijackedMods = mods;
         RMLog(@"官方 Mod 按钮已替换: 自动演示→自动游玩，生命条→锁血");
         return;
