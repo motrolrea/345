@@ -386,6 +386,9 @@ static Il2CppClass *gPaymentClass = NULL;
 static Il2CppClass *gModsClass = NULL;
 static Il2CppClass *gModBtnClass = NULL;
 static Il2CppClass *gPurchClass = NULL;
+static Il2CppClass *gTex2DClass = NULL;
+static Il2CppClass *gSpriteClass = NULL;
+static Il2CppClass *gColor32Class = NULL;
 static Il2CppClass *gSelectClass = NULL;
 static Il2CppClass *gObjectClass = NULL;
 static Il2CppClass *gGoClass = NULL;
@@ -433,6 +436,9 @@ static void rm_setup_classes(void) {
     gModsClass = rm_find_class_any("ModsControl");
     gModBtnClass = rm_find_class_any("ModButtonControl");
     gPurchClass = rm_find_class_any("PurchasableSongControl");
+    gTex2DClass = rm_find_class_ns("UnityEngine", "Texture2D");
+    gSpriteClass = rm_find_class_ns("UnityEngine", "Sprite");
+    gColor32Class = rm_find_class_ns("UnityEngine", "Color32");
     gSelectClass = rm_find_class_any("LevelSelectControl");
     gObjectClass = rm_find_class_ns("UnityEngine", "Object");
     gGoClass = rm_find_class_ns("UnityEngine", "GameObject");
@@ -1580,8 +1586,79 @@ static void rm_append_custom_mods(void) {
 //   对象、图标、展开动画都用官方的，只换 modIndex 和点击回调。
 // ---------------------------------------------------------------------------
 static void *gHijackedMods = NULL;
+static Il2CppObject *gIconAuto = NULL;
+static Il2CppObject *gIconLife = NULL;
 
-// 把 src 按钮当前显示的图标复制到 dst 按钮上
+// 运行时生成两张原创图标（64×64）：绿底播放键 = 自动游玩，红底横杠 = 锁血
+static Il2CppObject *rm_make_icon_sprite(int kind) {
+    const int S = 64;
+    if (!gTex2DClass || !gSpriteClass || !gColor32Class || !il2cpp_array_new || !il2cpp_object_new) return NULL;
+    Il2CppArray *px = il2cpp_array_new(gColor32Class, (size_t)(S * S));
+    if (!px) return NULL;
+    unsigned char *p = (unsigned char *)px + kOff_Array_Elements;
+    for (int y = 0; y < S; y++) {
+        for (int x = 0; x < S; x++) {
+            float dx = (x - S / 2.0f) / (S / 2.0f);
+            float dy = (y - S / 2.0f) / (S / 2.0f);
+            float d = dx * dx + dy * dy;
+            unsigned char r = 0, g = 0, b = 0, a = 0;
+            if (d <= 0.92f) {
+                if (kind == 0) { r = 92; g = 214; b = 140; }
+                else { r = 232; g = 84; b = 84; }
+                a = 255;
+                if (kind == 0) {
+                    if (x > 25 && x < 45 && y > 19 && y < 45 &&
+                        (x - 25) * 1.05f < (y - 19) && (x - 25) * 1.05f < (45 - y)) {
+                        r = 255; g = 255; b = 255;
+                    }
+                } else {
+                    if (x > 18 && x < 46 && y > 28 && y < 37) { r = 255; g = 255; b = 255; }
+                }
+            }
+            int idx = (y * S + x) * 4;
+            p[idx + 0] = r; p[idx + 1] = g; p[idx + 2] = b; p[idx + 3] = a;
+        }
+    }
+    const MethodInfo *ctor = il2cpp_class_get_method_from_name(gTex2DClass, ".ctor", 2);
+    if (!ctor) return NULL;
+    Il2CppObject *tex = (Il2CppObject *)il2cpp_object_new(gTex2DClass);
+    if (!tex) return NULL;
+    int w = S, h = S;
+    void *ca[2] = {&w, &h};
+    Il2CppException *e = NULL;
+    il2cpp_runtime_invoke(ctor, tex, ca, &e);
+    if (e) return NULL;
+    const MethodInfo *mSet = il2cpp_class_get_method_from_name(gTex2DClass, "SetPixels32", 1);
+    if (!mSet) return NULL;
+    void *sa[1] = {px};
+    il2cpp_runtime_invoke(mSet, tex, sa, &e);
+    if (e) return NULL;
+    const MethodInfo *mApply = il2cpp_class_get_method_from_name(gTex2DClass, "Apply", 0);
+    if (mApply) il2cpp_runtime_invoke(mApply, tex, NULL, &e);
+
+    const MethodInfo *mCreate = il2cpp_class_get_method_from_name(gSpriteClass, "Create", 3);
+    if (!mCreate) return NULL;
+    struct { float x, y, w, h; } rect = {0, 0, (float)S, (float)S};
+    struct { float x, y; } pivot = {0.5f, 0.5f};
+    void *sp[3] = {tex, &rect, &pivot};
+    Il2CppException *e2 = NULL;
+    Il2CppObject *spr = il2cpp_runtime_invoke(mCreate, NULL, sp, &e2);
+    return e2 ? NULL : spr;
+}
+
+static void rm_set_image_sprite(void *btn, Il2CppObject *spr) {
+    if (!btn || !spr) return;
+    void *img = *(void **)((char *)btn + 0x30);
+    if (!img) return;
+    Il2CppClass *k = il2cpp_object_get_class((Il2CppObject *)img);
+    const MethodInfo *m = k ? il2cpp_class_get_method_from_name(k, "set_sprite", 1) : NULL;
+    if (!m) return;
+    void *args[1] = {spr};
+    Il2CppException *e = NULL;
+    il2cpp_runtime_invoke(m, img, args, &e);
+}
+
+// 把 src 按钮当前显示的图标复制到 dst 按钮上（原创图标生成失败时兜底）
 static void rm_copy_image_sprite(void *dst, void *src) {
     if (!dst || !src) return;
     void *dstImg = *(void **)((char *)dst + 0x30);
@@ -1636,8 +1713,14 @@ static void rm_hijack_mod_buttons(void) {
         *(void **)((char *)life + 0xA8) = d;
         *(uint8_t *)((char *)life + 0x98) = 0;
         // 换图标，方便和原来的“自动演示 / 生命条”区分
-        rm_copy_image_sprite(demo, b[0]);   // 借用镜像按钮的图标
-        rm_copy_image_sprite(life, b[3]);   // 借用边框按钮的图标
+        gIconAuto = rm_make_icon_sprite(0);
+        gIconLife = rm_make_icon_sprite(1);
+        if (gIconAuto) rm_set_image_sprite(demo, gIconAuto);
+        else rm_copy_image_sprite(demo, b[0]);
+        if (gIconLife) rm_set_image_sprite(life, gIconLife);
+        else rm_copy_image_sprite(life, b[3]);
+        RMLog(@"自定义图标: 自动=%@ 锁血=%@",
+              gIconAuto ? @"生成成功" : @"兜底", gIconLife ? @"生成成功" : @"兜底");
         gHijackedMods = mods;
         RMLog(@"官方 Mod 按钮已替换: 自动演示→自动游玩，生命条→锁血");
         return;
@@ -1664,13 +1747,16 @@ static void rm_refresh_hijacked_visuals(void) {
     void **b = (void **)((char *)buttons + kOff_Array_Elements);
     void *demo = b[5];
     void *life = b[1];
-    if (demo) {
+    // 官方状态切换时会覆盖图标，这里持续把原创图标贴回去
+    if (demo && gIconAuto) rm_set_image_sprite(demo, gIconAuto);
+    if (life && gIconLife) rm_set_image_sprite(life, gIconLife);
+    if (demo && !gIconAuto) {
         rm_image_set_color(*(void **)((char *)demo + 0x30),
                            RMAutoPlay ? 0.40f : 1.0f,
                            RMAutoPlay ? 0.95f : 1.0f,
                            RMAutoPlay ? 0.60f : 1.0f, 1.0f);
     }
-    if (life) {
+    if (life && !gIconLife) {
         rm_image_set_color(*(void **)((char *)life + 0x30),
                            RMLockHP ? 1.0f : 1.0f,
                            RMLockHP ? 0.35f : 1.0f,
