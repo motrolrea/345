@@ -806,8 +806,7 @@ static BOOL rm_in_gameplay(void) {
 }
 
 static int rm_desired_ball_mode(void) {
-    BOOL autoHide = RMAutoHideInGame && rm_in_gameplay();
-    if (autoHide) return 0;
+    if (RMAutoHideInGame && RMInLevel) return 0;
     return RMBallVisible ? 1 : 2;
 }
 
@@ -839,8 +838,8 @@ void RMUpdateBall(void) {
             ball.alpha = MAX(0.2f, MIN(1.0f, RMBallAlpha));
             [host addSubview:ball];
         } else {
-            CGFloat side = 32;
-            gBallWindow.frame = CGRectMake(sb.size.width - side, sb.size.height / 2 - side / 2, side, side);
+            CGFloat side = 48;
+            gBallWindow.frame = CGRectMake(sb.size.width - side + 8, sb.size.height / 2 - side / 2, side, side);
             RMEdgeDotView *dot = [[RMEdgeDotView alloc] initWithFrame:CGRectMake(0, 0, side, side)];
             [host addSubview:dot];
         }

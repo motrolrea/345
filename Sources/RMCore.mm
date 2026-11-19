@@ -1277,6 +1277,24 @@ static void rm_watch_play_gate(void) {
         }
     }
 
+    // 面板打开时若按“未解锁”渲染（显示 解锁/￥6.00），这里按最新拥有状态重建一次
+    static void *lastPanelLevel = NULL;
+    if (level != lastPanelLevel) {
+        lastPanelLevel = level;
+        void *sic = *(void **)((char *)sel + 0x48);   // LevelSelectControl.songInfoControl
+        if (sic) {
+            Il2CppClass *k = il2cpp_object_get_class((Il2CppObject *)sic);
+            const MethodInfo *m = k ? il2cpp_class_get_method_from_name(k, "SetData", 3) : NULL;
+            if (m) {
+                uint8_t f = 0, o = 0;
+                void *a[3] = {level, &f, &o};
+                Il2CppException *e = NULL;
+                il2cpp_runtime_invoke(m, sic, a, &e);
+                RMLog(@"选曲面板: 按解锁状态重建 %@", e ? @"失败" : @"成功");
+            }
+        }
+    }
+
     uint8_t onPlay = *(uint8_t *)((char *)sel + 0x20C);
     NSString *probe = [NSString stringWithFormat:
                        @"选曲: level=%@ music=%@ onPlay=%d clip=%.1f unlocked=%d/%d",
@@ -1350,20 +1368,14 @@ static int rm_unlock_mod_buttons(void) {
 // ---------------------------------------------------------------------------
 static void rm_chip_tap(void *target, int32_t index) {
     int which = (int)index - 200;
-    switch (which) {
-        case 0: RMLockHP = !RMLockHP; break;
-        case 1: RMUnlockAllSongs = !RMUnlockAllSongs; break;
-        case 2: RMBallVisible = !RMBallVisible; break;
-        default: return;
-    }
+    if (which == 0) RMAutoPlay = !RMAutoPlay;
+    else if (which == 1) RMLockHP = !RMLockHP;
+    else return;
     NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
+    [d setBool:RMAutoPlay forKey:@"rm.auto"];
     [d setBool:RMLockHP forKey:@"rm.hp"];
-    [d setBool:RMUnlockAllSongs forKey:@"rm.unlock"];
-    [d setBool:RMBallVisible forKey:@"rm.ball.show"];
-    RMLog(@"自定义 Mod 点击: %d (锁血=%d 解锁=%d 球=%d)",
-          which, RMLockHP, RMUnlockAllSongs, RMBallVisible);
+    RMLog(@"官方 Mod 按钮: %d → 自动游玩=%d 锁血=%d", which, RMAutoPlay, RMLockHP);
     RMApplySettingsNow();
-    RMUpdateBall();
 }
 
 // 复制一个现成的 Action<int> 委托对象，只把入口换成我们自己的 C 函数
@@ -1522,6 +1534,59 @@ static void rm_append_custom_mods(void) {
 }
 
 
+// ---------------------------------------------------------------------------
+// 直接替换官方 Mods 条里的两个按钮：
+//   modButtons[5] 官方“自动演示” → 我们的“自动游玩（有成绩）”
+//   modButtons[1] 官方“生命条”   → 我们的“锁血”
+//   对象、图标、展开动画都用官方的，只换 modIndex 和点击回调。
+// ---------------------------------------------------------------------------
+static void *gHijackedMods = NULL;
+
+static void rm_hijack_mod_buttons(void) {
+    if (!gModsClass || !gModBtnClass || !gFindObjectsM1) return;
+    Il2CppType *mt = il2cpp_class_get_type(gModsClass);
+    void *mtObj = mt ? il2cpp_type_get_object(mt) : NULL;
+    if (!mtObj) return;
+    Il2CppException *exc = NULL;
+    void *args[1] = {mtObj};
+    Il2CppObject *arr = il2cpp_runtime_invoke(gFindObjectsM1, NULL, args, &exc);
+    if (exc || !arr) return;
+    NSUInteger n = rm_array_count(arr);
+    if (n == 0 || n > 32) return;
+    void **elems = (void **)((char *)arr + kOff_Array_Elements);
+
+    for (NSUInteger i = 0; i < n; i++) {
+        void *mods = elems[i];
+        if (!mods || mods == gHijackedMods) continue;
+        void *tr = rm_call_obj0(mods, "get_transform");
+        void *go = tr ? rm_call_obj0(tr, "get_gameObject") : NULL;
+        if (!go || !rm_boxed_bool(rm_call_obj0(go, "get_activeInHierarchy"))) continue;
+
+        void *buttons = *(void **)((char *)mods + 0xD8);
+        int count = buttons ? (int)rm_array_count(buttons) : 0;
+        if (count < 7) continue;
+        void **b = (void **)((char *)buttons + kOff_Array_Elements);
+        void *demo = b[5];
+        void *life = b[1];
+        if (!demo || !life) continue;
+
+        Il2CppObject *proto = (Il2CppObject *)*(void **)((char *)demo + 0xA8);
+        Il2CppObject *d = rm_clone_action_delegate(proto);
+        if (!d) { RMLog(@"官方 Mod 替换: 委托复制失败"); return; }
+
+        *(int *)((char *)demo + 0x70) = 200;
+        *(void **)((char *)demo + 0xA8) = d;
+        *(uint8_t *)((char *)demo + 0x98) = 0;
+        *(int *)((char *)life + 0x70) = 201;
+        *(void **)((char *)life + 0xA8) = d;
+        *(uint8_t *)((char *)life + 0x98) = 0;
+        gHijackedMods = mods;
+        RMLog(@"官方 Mod 按钮已替换: 自动演示→自动游玩，生命条→锁血");
+        return;
+    }
+}
+
+
 BOOL RMModsPanelPresent(void) {
     if (!gModsClass || !gFindObjectsM1 || !il2cpp_class_get_type || !il2cpp_type_get_object) return NO;
     Il2CppType *type = il2cpp_class_get_type(gModsClass);
@@ -1655,9 +1720,10 @@ static void rm_runtime_tick(void) {
 
     if (now - gLastModUnlock > 2.0) {
         gLastModUnlock = now;
-        if (!RMInLevel) rm_unlock_mod_buttons();
-        // 自定义克隆按钮先停用：它会在官方面板里留一个灰色圆球，且结算有概率闪退
-        // rm_append_custom_mods();
+        if (!RMInLevel) {
+            rm_unlock_mod_buttons();
+            rm_hijack_mod_buttons();
+        }
     }
 
     static CFTimeInterval lastBeat = 0;
