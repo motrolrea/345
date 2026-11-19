@@ -806,7 +806,8 @@ static BOOL rm_in_gameplay(void) {
 }
 
 static int rm_desired_ball_mode(void) {
-    if (RMAutoHideInGame && RMInLevel) return 0;
+    // 游玩中不再完全隐藏，改成右缘小圆点（可点开设置）
+    if (RMInLevel) return 2;
     return RMBallVisible ? 1 : 2;
 }
 
