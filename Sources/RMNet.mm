@@ -150,7 +150,11 @@ void RMStartResourceDownload(void) {
                   base, cache.lastPathComponent, (unsigned long)ids.count);
 
             NSString *placeholder = @"http://rizastcdn.pigeongames.cn/default/";
-            NSInteger total = 0, skipped = 0, ok = 0, failed = 0;
+            __block NSInteger total = 0, skipped = 0, ok = 0, failed = 0;
+
+            // 先统计 + 先把已有文件跳过，再并发下载（6 路）
+            NSMutableArray<NSString *> *todoUrls = [NSMutableArray array];
+            NSMutableArray<NSString *> *todoDests = [NSMutableArray array];
             for (NSString *raw in ids) {
                 if (![raw isKindOfClass:NSString.class]) continue;
                 if (![raw containsString:@".bundle"]) continue;
@@ -167,27 +171,42 @@ void RMStartResourceDownload(void) {
                 if (name.length == 0) continue;
                 NSString *dest = [cache stringByAppendingPathComponent:name];
                 if ([fm fileExistsAtPath:dest]) { skipped++; continue; }
+                [todoUrls addObject:urlStr];
+                [todoDests addObject:dest];
+            }
+            RMLog(@"资源下载: 需要下载 %lu 个（已有 %ld / 共 %ld）",
+                  (unsigned long)todoUrls.count, (long)skipped, (long)total);
 
-                NSURL *u = [NSURL URLWithString:urlStr];
+            dispatch_semaphore_t slots = dispatch_semaphore_create(6);
+            dispatch_group_t group = dispatch_group_create();
+            NSObject *counterLock = [NSObject new];
+            __block NSInteger doneCount = 0;
+            for (NSUInteger i = 0; i < todoUrls.count; i++) {
+                NSURL *u = [NSURL URLWithString:todoUrls[i]];
+                NSString *dest = todoDests[i];
                 if (!u) { failed++; continue; }
-                dispatch_semaphore_t sem = dispatch_semaphore_create(0);
-                __block BOOL good = NO;
-                NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:u];
-                req.timeoutInterval = 30;
+                dispatch_semaphore_wait(slots, DISPATCH_TIME_FOREVER);
+                dispatch_group_enter(group);
+                NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:u
+                                                                  cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
+                                                              timeoutInterval:60];
                 [[[NSURLSession sharedSession] dataTaskWithRequest:req
                                                 completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
-                    if (data.length > 0 && !err) {
-                        good = [data writeToFile:dest atomically:YES];
+                    BOOL good = (data.length > 0 && !err && [data writeToFile:dest atomically:YES]);
+                    @synchronized (counterLock) {
+                        if (good) ok++; else failed++;
+                        doneCount++;
+                        NSInteger d = doneCount;
+                        if (d % 50 == 0) {
+                            RMLog(@"资源下载: %ld/%lu（成功 %ld 失败 %ld）",
+                                  (long)d, (unsigned long)todoUrls.count, (long)ok, (long)failed);
+                        }
                     }
-                    dispatch_semaphore_signal(sem);
+                    dispatch_semaphore_signal(slots);
+                    dispatch_group_leave(group);
                 }] resume];
-                dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(40 * NSEC_PER_SEC)));
-                if (good) ok++; else failed++;
-                if ((ok + failed) % 20 == 0) {
-                    RMLog(@"资源下载: %ld/%ld（成功 %ld 失败 %ld 已有 %ld）",
-                          (long)(ok + failed), (long)total, (long)ok, (long)failed, (long)skipped);
-                }
             }
+            dispatch_group_wait(group, DISPATCH_TIME_FOREVER);
             RMLog(@"资源下载完成: 共 %ld，成功 %ld，失败 %ld，已存在 %ld",
                   (long)total, (long)ok, (long)failed, (long)skipped);
             running = NO;
