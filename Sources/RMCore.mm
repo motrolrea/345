@@ -1638,7 +1638,13 @@ static BOOL rm_button_bound_to(void *btn, void *fn) {
     return *(void **)((char *)d + 0x40) == fn;
 }
 
-static void rm_apply_button_visual(void *btn, BOOL on) {
+static BOOL rm_mods_panel_open(void) {
+    if (!gInstalledMods) return NO;
+    return *(uint8_t *)((char *)gInstalledMods + 0xD4) != 0;   // ModsControl.hasExpanded
+}
+
+// paint=NO 时只写 State（面板收起中），不碰颜色，避免收起态冒出小圆球
+static void rm_apply_button_visual(void *btn, BOOL on, BOOL paint) {
     if (!btn) return;
     void *states = *(void **)((char *)btn + 0x68);
     if (!states) return;
@@ -1646,6 +1652,7 @@ static void rm_apply_button_visual(void *btn, BOOL on) {
     if (n <= 0) return;
     int idx = (on && n > 1) ? 1 : 0;
     *(int *)((char *)btn + 0x88) = idx;     // State
+    if (!paint) return;
     void *img = *(void **)((char *)btn + 0x30);
     if (!img) return;
     void *colors = *(void **)((char *)btn + 0x78);
@@ -1660,13 +1667,14 @@ static void rm_apply_button_visual(void *btn, BOOL on) {
 }
 
 static void rm_sync_mod_buttons(void) {
+    BOOL open = rm_mods_panel_open();
     if (gAutoPlayBtn && (int)RMAutoPlay != gAutoBtnVis) {
         gAutoBtnVis = RMAutoPlay ? 1 : 0;
-        rm_apply_button_visual(gAutoPlayBtn, RMAutoPlay);
+        rm_apply_button_visual(gAutoPlayBtn, RMAutoPlay, open);
     }
     if (gLockHPBtn && (int)RMLockHP != gLockBtnVis) {
         gLockBtnVis = RMLockHP ? 1 : 0;
-        rm_apply_button_visual(gLockHPBtn, RMLockHP);
+        rm_apply_button_visual(gLockHPBtn, RMLockHP, open);
     }
 }
 
