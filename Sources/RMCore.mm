@@ -1359,6 +1359,21 @@ static void rm_watch_play_gate(void) {
     rm_probe_purchase();
 
     uint8_t onPlay = *(uint8_t *)((char *)sel + 0x20C);
+
+    // PlayLevel 一进来就 return 的条件之一就是 onPlay；一旦首次点击后加载失败，
+    // onPlay 会一直停在 1，之后所有点击都“没反应”。这里超时复位，恢复可点击。
+    static CFTimeInterval onPlaySince = 0;
+    if (onPlay) {
+        if (onPlaySince == 0) onPlaySince = CFAbsoluteTimeGetCurrent();
+        else if (CFAbsoluteTimeGetCurrent() - onPlaySince > 6.0) {
+            *(uint8_t *)((char *)sel + 0x20C) = 0;
+            onPlay = 0;
+            onPlaySince = 0;
+            RMLog(@"开始按钮: onPlay 卡住 6 秒仍未进关，已复位");
+        }
+    } else {
+        onPlaySince = 0;
+    }
     NSString *probe = [NSString stringWithFormat:
                        @"选曲: level=%@ music=%@ onPlay=%d clip=%.1f unlocked=%d/%d",
                        rm_il2cpp_string_text(levelId) ?: @"-",
