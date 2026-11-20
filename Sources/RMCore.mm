@@ -1565,14 +1565,14 @@ static Il2CppObject *rm_make_mod_sprite(int kind, BOOL filled) {
     return il2cpp_runtime_invoke(mCreate, NULL, a3, &e3);
 }
 
-// states 必须是 Sprite[]，长度合理才动它（防止字段不符时写坏内存）
+// 只做最基本的合法性检查：长度合理 + 元素指针像托管对象
 static BOOL rm_states_look_valid(void *states) {
-    if (!states || !gSpriteClass) return NO;
+    if (!states) return NO;
     int n = (int)rm_array_count(states);
     if (n <= 0 || n > 8) return NO;
     void **e = (void **)((char *)states + kOff_Array_Elements);
     for (int i = 0; i < n; i++) {
-        if (e[i] && il2cpp_object_get_class((Il2CppObject *)e[i]) != gSpriteClass) return NO;
+        if (e[i] && *(uintptr_t *)e[i] < 0x100000000ULL) return NO;
     }
     return YES;
 }
@@ -1594,22 +1594,23 @@ static void rm_install_button_icons(void *btn, int kind) {
 }
 
 // 官方解锁动画用的那张图片（0x40）只在 Unlock() 里显示；这里直接收起，避免残留的锁图标
+// 安全约束：只有当它不是按钮自己那个 GameObject 时才 SetActive(false)
 static void rm_hide_unlock_overlay(void *btn) {
-    if (!btn) return;
+    if (!btn || !gGoClass) return;
     void *img = *(void **)((char *)btn + 0x40);
-    if (!img || !gGoClass) return;
+    if (!img) return;
     Il2CppClass *ik = il2cpp_object_get_class((Il2CppObject *)img);
     const MethodInfo *mGo = ik ? il2cpp_class_get_method_from_name(ik, "get_gameObject", 0) : NULL;
     if (!mGo) return;
     Il2CppException *e1 = NULL;
-    Il2CppObject *go = il2cpp_runtime_invoke(mGo, img, NULL, &e1);
-    if (e1 || !go) return;
+    Il2CppObject *imgGo = il2cpp_runtime_invoke(mGo, img, NULL, &e1);
+    if (e1 || !imgGo) return;
     const MethodInfo *mSetActive = il2cpp_class_get_method_from_name(gGoClass, "SetActive", 1);
     if (!mSetActive) return;
     uint8_t no = 0;
     void *args[1] = {&no};
     Il2CppException *e2 = NULL;
-    il2cpp_runtime_invoke(mSetActive, go, args, &e2);
+    il2cpp_runtime_invoke(mSetActive, imgGo, args, &e2);
 }
 
 static BOOL rm_hint_text_valid(void *mods) {
@@ -1685,14 +1686,14 @@ static void rm_patch_click(void *btn, void *fn) {
 }
 
 // 长按：官方 Update() 会传 modIndex-1
-//   4 = hideModButton(锁血)，5 = demoModButton(自动游玩)
+//   实际配置：demoModButton modIndex=6 → 自动游玩；hideModButton modIndex=5 → 锁血
 static void rm_long_mod(void *self, int32_t idx) {
     int modIndex = idx + 1;
     // 用委托自己的 m_target 作为 ModsControl，比依赖传入寄存器安全
     void *target = gLongDelegate ? *(void **)((char *)gLongDelegate + 0x20) : self;
-    if (modIndex == 5 || modIndex == 4) {
+    if (modIndex == 6 || modIndex == 5) {
         void *mods = rm_is_mods(target) ? target : gInstalledMods;
-        if (modIndex == 5) {
+        if (modIndex == 6) {
             rm_play_official_hint(mods, modIndex,
                                   @"自动游玩：自动击打全部音符，正常结算成绩。官方「自动演示」不计成绩。");
         } else {
@@ -1747,63 +1748,33 @@ static void rm_sync_mod_buttons(void) {
     BOOL open = rm_mods_panel_open();
     if (gAutoPlayBtn && (int)RMAutoPlay != gAutoBtnVis) {
         gAutoBtnVis = RMAutoPlay ? 1 : 0;
-        gAutoBtnSeen = gAutoBtnVis;
         rm_apply_button_visual(gAutoPlayBtn, RMAutoPlay, open);
     }
     if (gLockHPBtn && (int)RMLockHP != gLockBtnVis) {
         gLockBtnVis = RMLockHP ? 1 : 0;
-        gLockBtnSeen = gLockBtnVis;
         rm_apply_button_visual(gLockHPBtn, RMLockHP, open);
     }
 }
 
-// 读按钮 State：玩家在 Mods 栏点了一下，就把新状态同步到我们的开关
-static void rm_watch_mod_buttons(void) {
-    if (rm_is_mod_button(gAutoPlayBtn)) {
-        int st = *(int *)((char *)gAutoPlayBtn + 0x88);
-        if (gAutoBtnSeen < 0) gAutoBtnSeen = st;
-        else if (st != gAutoBtnSeen) {
-            gAutoBtnSeen = st;
-            BOOL on = st != 0;
-            if (on != RMAutoPlay) {
-                RMAutoPlay = on;
-                [NSUserDefaults.standardUserDefaults setBool:on forKey:@"rm.auto"];
-                RMLog(@"Mods 栏点击: 自动游玩 → %@", on ? @"开" : @"关");
-                gAutoBtnVis = st;
-                RMApplySettingsNow();
-            }
-        }
-    }
-    if (rm_is_mod_button(gLockHPBtn)) {
-        int st = *(int *)((char *)gLockHPBtn + 0x88);
-        if (gLockBtnSeen < 0) gLockBtnSeen = st;
-        else if (st != gLockBtnSeen) {
-            gLockBtnSeen = st;
-            BOOL on = st != 0;
-            if (on != RMLockHP) {
-                RMLockHP = on;
-                [NSUserDefaults.standardUserDefaults setBool:on forKey:@"rm.hp"];
-                RMLog(@"Mods 栏点击: 锁血 → %@", on ? @"开" : @"关");
-                gLockBtnVis = st;
-                RMApplySettingsNow();
-            }
-        }
-    }
+// 清掉付费锁：只改标志位（不调 Unlock()，否则收起态会冒出灰色圆球）
+// 7 个按钮字段是固定偏移 0x50..0x80，不依赖 modButtons 数组，避免数组字段不符时漏清
+static void rm_clear_one_lock(void *btn) {
+    if (!rm_is_mod_button(btn)) return;
+    *(uint8_t *)((char *)btn + 0x98) = 0;   // isLocked
+    *(uint8_t *)((char *)btn + 0xD8) = 0;   // onUnlockPopup
+    rm_hide_unlock_overlay(btn);
 }
 
-// 清掉付费锁：只改标志位（不调 Unlock()，否则收起态会冒出灰色圆球）
 static void rm_clear_button_locks(void *mods) {
     if (!rm_is_mods(mods)) return;
+    for (size_t off = 0x50; off <= 0x80; off += 8) {
+        rm_clear_one_lock(*(void **)((char *)mods + off));
+    }
     void *buttons = *(void **)((char *)mods + 0xD8);
     int n = buttons ? (int)rm_array_count(buttons) : 0;
-    if (n <= 0 || n > 32) return;
-    void **b = (void **)((char *)buttons + kOff_Array_Elements);
-    for (int i = 0; i < n; i++) {
-        void *btn = b[i];
-        if (!rm_is_mod_button(btn)) continue;
-        *(uint8_t *)((char *)btn + 0x98) = 0;   // isLocked
-        *(uint8_t *)((char *)btn + 0xD8) = 0;   // onUnlockPopup
-        rm_hide_unlock_overlay(btn);
+    if (n > 0 && n <= 32) {
+        void **b = (void **)((char *)buttons + kOff_Array_Elements);
+        for (int i = 0; i < n; i++) rm_clear_one_lock(b[i]);
     }
 }
 
@@ -1835,6 +1806,10 @@ static void rm_install_on_mods(void *mods, BOOL active) {
               *(int *)((char *)demo + 0x70), *(int *)((char *)hide + 0x70),
               *(uint8_t *)((char *)demo + 0x98), *(uint8_t *)((char *)hide + 0x98),
               *(int *)((char *)demo + 0x88), *(int *)((char *)hide + 0x88));
+        RMLog(@"Mods 图标: states %d/%d, sprite类=%p, 生成=%d",
+              (int)rm_array_count(*(void **)((char *)demo + 0x68)),
+              (int)rm_array_count(*(void **)((char *)hide + 0x68)),
+              gSpriteClass, gIconsMods == mods);
     }
     rm_sync_mod_buttons();
 }
@@ -1920,7 +1895,6 @@ static void rm_runtime_tick(void) {
         rm_watch_play_gate();
         if (!RMInLevel) {
             rm_install_mod_replacements();
-            rm_watch_mod_buttons();
             rm_sync_mod_buttons();
         }
     }
