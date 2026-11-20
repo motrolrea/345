@@ -388,6 +388,7 @@ static Il2CppClass *gPaymentClass = NULL;
 static Il2CppClass *gModsClass = NULL;
 static Il2CppClass *gModBtnClass = NULL;
 static Il2CppClass *gTscClass = NULL;
+static Il2CppClass *gUIImageClass = NULL;
 static Il2CppClass *gPurchClass = NULL;
 static Il2CppClass *gTex2DClass = NULL;
 static Il2CppClass *gSpriteClass = NULL;
@@ -439,6 +440,7 @@ static void rm_setup_classes(void) {
     gModsClass = rm_find_class_any("ModsControl");
     gModBtnClass = rm_find_class_any("ModButtonControl");
     gTscClass = rm_find_class_any("TextScrollControl");
+    gUIImageClass = rm_find_class_ns("UnityEngine.UI", "Image");
     gPurchClass = rm_find_class_any("PurchasableSongControl");
     gTex2DClass = rm_find_class_ns("UnityEngine", "Texture2D");
     gSpriteClass = rm_find_class_ns("UnityEngine", "Sprite");
@@ -1593,24 +1595,22 @@ static void rm_install_button_icons(void *btn, int kind) {
     }
 }
 
-// 官方解锁动画用的那张图片（0x40）只在 Unlock() 里显示；这里直接收起，避免残留的锁图标
-// 安全约束：只有当它不是按钮自己那个 GameObject 时才 SetActive(false)
+// 官方解锁动画用的那张图片（0x40）只在 Unlock() 里显示；这里把它的顶点色改成全透明，
+// 不动 GameObject（避免把按钮本体或说明文字一起 SetActive(false) 造成野指针）。
 static void rm_hide_unlock_overlay(void *btn) {
-    if (!btn || !gGoClass) return;
+    if (!btn || !gUIImageClass) return;
     void *img = *(void **)((char *)btn + 0x40);
     if (!img) return;
-    Il2CppClass *ik = il2cpp_object_get_class((Il2CppObject *)img);
-    const MethodInfo *mGo = ik ? il2cpp_class_get_method_from_name(ik, "get_gameObject", 0) : NULL;
-    if (!mGo) return;
-    Il2CppException *e1 = NULL;
-    Il2CppObject *imgGo = il2cpp_runtime_invoke(mGo, img, NULL, &e1);
-    if (e1 || !imgGo) return;
-    const MethodInfo *mSetActive = il2cpp_class_get_method_from_name(gGoClass, "SetActive", 1);
-    if (!mSetActive) return;
-    uint8_t no = 0;
-    void *args[1] = {&no};
-    Il2CppException *e2 = NULL;
-    il2cpp_runtime_invoke(mSetActive, imgGo, args, &e2);
+    if (il2cpp_object_get_class((Il2CppObject *)img) != gUIImageClass) {
+        static BOOL logged = NO;
+        if (!logged) {
+            logged = YES;
+            RMLog(@"Mods 锁图标: 0x40 不是 Image（类=%p），跳过",
+                  il2cpp_object_get_class((Il2CppObject *)img));
+        }
+        return;
+    }
+    rm_image_set_color(img, 1.0f, 1.0f, 1.0f, 0.0f);
 }
 
 static BOOL rm_hint_text_valid(void *mods) {
@@ -1685,6 +1685,13 @@ static void rm_patch_click(void *btn, void *fn) {
     *(void **)((char *)d + 0x10) = fn;
 }
 
+static BOOL rm_click_bound(void *btn, void *fn) {
+    if (!rm_is_mod_button(btn)) return NO;
+    Il2CppObject *d = (Il2CppObject *)*(void **)((char *)btn + 0xA8);
+    if (!d) return NO;
+    return *(void **)((char *)d + 0x40) == fn;
+}
+
 // 长按：官方 Update() 会传 modIndex-1
 //   实际配置：demoModButton modIndex=6 → 自动游玩；hideModButton modIndex=5 → 锁血
 static void rm_long_mod(void *self, int32_t idx) {
@@ -1723,11 +1730,13 @@ static void rm_apply_button_visual(void *btn, BOOL on, BOOL paint) {
     void *states = *(void **)((char *)btn + 0x68);
     if (!rm_states_look_valid(states)) return;
     int n = (int)rm_array_count(states);
+    // 有些按钮只有 1 个状态图，这时不能把 State 写成 1（官方 Click 会越界抛异常）
     int idx = (on && n > 1) ? 1 : 0;
-    *(int *)((char *)btn + 0x88) = idx;     // State
+    *(int *)((char *)btn + 0x88) = idx;
     if (!paint) return;
     void *img = *(void **)((char *)btn + 0x30);
     if (!img) return;
+    if (gUIImageClass && il2cpp_object_get_class((Il2CppObject *)img) != gUIImageClass) return;
     void *colors = *(void **)((char *)btn + 0x78);
     int cn = colors ? (int)rm_array_count(colors) : 0;
     if (cn > 0 && cn < 32) {
@@ -1735,8 +1744,10 @@ static void rm_apply_button_visual(void *btn, BOOL on, BOOL paint) {
         float *c = (float *)((char *)colors + kOff_Array_Elements + (size_t)ci * 16);
         rm_image_set_color(img, c[0], c[1], c[2], c[3]);
     }
-    Il2CppObject *spr = ((Il2CppObject **)((char *)states + kOff_Array_Elements))[idx];
-    if (spr) rm_set_image_sprite(btn, spr);
+    if (idx < n) {
+        Il2CppObject *spr = ((Il2CppObject **)((char *)states + kOff_Array_Elements))[idx];
+        if (spr) rm_set_image_sprite(btn, spr);
+    }
 }
 
 static BOOL rm_mods_panel_open(void) {
@@ -1778,12 +1789,36 @@ static void rm_clear_button_locks(void *mods) {
     }
 }
 
+// 一次性打印 Mods 面板的字段布局，用于确认偏移是否与 dump 一致
+static void rm_log_mods_layout(void *mods) {
+    void *arr = *(void **)((char *)mods + 0xD8);
+    RMLog(@"Mods 布局: modButtons(0xD8)=%d", arr ? (int)rm_array_count(arr) : -1);
+    for (size_t off = 0x50; off <= 0x80; off += 8) {
+        void *b = *(void **)((char *)mods + off);
+        if (!b) continue;
+        BOOL ok = rm_is_mod_button(b);
+        void *states = ok ? *(void **)((char *)b + 0x68) : NULL;
+        void *colors = ok ? *(void **)((char *)b + 0x78) : NULL;
+        void *img = ok ? *(void **)((char *)b + 0x30) : NULL;
+        RMLog(@"  +%02zx %p 按钮=%d idx=%d states=%d colors=%d lock=%d st=%d img=%d",
+              off, b, ok ? 1 : 0,
+              ok ? *(int *)((char *)b + 0x70) : -1,
+              states ? (int)rm_array_count(states) : -1,
+              colors ? (int)rm_array_count(colors) : -1,
+              ok ? *(uint8_t *)((char *)b + 0x98) : -1,
+              ok ? *(int *)((char *)b + 0x88) : -1,
+              (img && gUIImageClass &&
+               il2cpp_object_get_class((Il2CppObject *)img) == gUIImageClass) ? 1 : 0);
+    }
+}
+
 static void rm_install_on_mods(void *mods, BOOL active) {
     void *demo = *(void **)((char *)mods + 0x78);
     void *hide = *(void **)((char *)mods + 0x70);
     if (!rm_is_mod_button(demo) || !rm_is_mod_button(hide)) return;
 
     if (gIconsMods != mods) {
+        rm_log_mods_layout(mods);
         rm_install_button_icons(demo, 0);
         rm_install_button_icons(hide, 1);
         gIconsMods = mods;
@@ -1806,10 +1841,12 @@ static void rm_install_on_mods(void *mods, BOOL active) {
               *(int *)((char *)demo + 0x70), *(int *)((char *)hide + 0x70),
               *(uint8_t *)((char *)demo + 0x98), *(uint8_t *)((char *)hide + 0x98),
               *(int *)((char *)demo + 0x88), *(int *)((char *)hide + 0x88));
-        RMLog(@"Mods 图标: states %d/%d, sprite类=%p, 生成=%d",
+        RMLog(@"Mods 图标: states %d/%d, sprite类=%p, 生成=%d, 点击绑定=%d/%d",
               (int)rm_array_count(*(void **)((char *)demo + 0x68)),
               (int)rm_array_count(*(void **)((char *)hide + 0x68)),
-              gSpriteClass, gIconsMods == mods);
+              gSpriteClass, gIconsMods == mods,
+              rm_click_bound(demo, (void *)rm_tap_autoplay) ? 1 : 0,
+              rm_click_bound(hide, (void *)rm_tap_lockhp) ? 1 : 0);
     }
     rm_sync_mod_buttons();
 }
