@@ -18,7 +18,6 @@
 #include <dlfcn.h>
 #include <mach-o/dyld.h>
 #include <mach/mach.h>
-#include <mach/mach_vm.h>
 #include <string.h>
 #include <math.h>
 #include <stdarg.h>
@@ -987,10 +986,10 @@ static Il2CppString *rm_level_track_id(Il2CppString *levelId);
 // 读出来才知道要往 ownedTracks 里塞什么形式的 id。
 // ---------------------------------------------------------------------------
 static BOOL rm_safe_read(uintptr_t addr, void *buf, size_t len) {
-    mach_vm_size_t got = 0;
-    kern_return_t kr = mach_vm_read_overwrite(mach_task_self(), (mach_vm_address_t)addr,
-                                              (mach_vm_size_t)len, (mach_vm_address_t)buf, &got);
-    return kr == KERN_SUCCESS && got == (mach_vm_size_t)len;
+    vm_size_t got = 0;
+    kern_return_t kr = vm_read_overwrite(mach_task_self(), (vm_address_t)addr,
+                                         (vm_size_t)len, (vm_address_t)buf, &got);
+    return kr == KERN_SUCCESS && got == (vm_size_t)len;
 }
 
 static Il2CppString *gTrackPrefixObj = NULL;
