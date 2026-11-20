@@ -369,7 +369,7 @@ static UIWindowScene *rm_active_scene(void) {
     [_card addSubview:_titleLabel];
 
     _subLabel = [[UILabel alloc] initWithFrame:CGRectMake(20, 40, 200, 16)];
-    _subLabel.text = @"律动轨迹 2.7.1 · 注入版";
+    _subLabel.text = @"律动轨迹 2.8.0 · 注入版";
     _subLabel.font = [UIFont systemFontOfSize:11];
     _subLabel.textColor = [UIColor colorWithWhite:1 alpha:0.45];
     [_card addSubview:_subLabel];

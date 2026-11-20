@@ -27,7 +27,7 @@ static void RMBootstrap(void) {
     RMBallSize       = [d objectForKey:@"rm.ball.size"] ? [d floatForKey:@"rm.ball.size"] : 56.0f;
     if (RMBallSize < 40.0f || RMBallSize > 96.0f) RMBallSize = 56.0f;
 
-    RMLog(@"dylib 已加载（2.7.1 基线），autoplay=%d nobad=%d freehold=%d hp=%d unlock=%d",
+    RMLog(@"dylib 已加载（2.8.0 基线），autoplay=%d nobad=%d freehold=%d hp=%d unlock=%d",
           RMAutoPlay, RMNoBad, RMFreeHold, RMLockHP, RMUnlockAllSongs);
 
     dispatch_async(dispatch_get_main_queue(), ^{
