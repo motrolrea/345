@@ -17,6 +17,8 @@
 #import <QuartzCore/QuartzCore.h>
 #include <dlfcn.h>
 #include <mach-o/dyld.h>
+#include <mach/mach.h>
+#include <mach/mach_vm.h>
 #include <string.h>
 #include <math.h>
 #include <stdarg.h>
@@ -979,6 +981,53 @@ static void rm_infer_track_id_affix(Il2CppObject **keys, int keyCount,
                                     void **levelIds, int levelCount);
 static Il2CppString *rm_level_track_id(Il2CppString *levelId);
 
+// ---------------------------------------------------------------------------
+// PlayLevel / BeginOpenLevel 真正比对的是 TrackUnlocked(<字符串字面量> + Level.id)，
+// 那个字面量在 UnityFramework 的 0x4BA9660 槽位（il2cpp 字符串字面量缓存）。
+// 读出来才知道要往 ownedTracks 里塞什么形式的 id。
+// ---------------------------------------------------------------------------
+static BOOL rm_safe_read(uintptr_t addr, void *buf, size_t len) {
+    mach_vm_size_t got = 0;
+    kern_return_t kr = mach_vm_read_overwrite(mach_task_self(), (mach_vm_address_t)addr,
+                                              (mach_vm_size_t)len, (mach_vm_address_t)buf, &got);
+    return kr == KERN_SUCCESS && got == (mach_vm_size_t)len;
+}
+
+static Il2CppString *gTrackPrefixObj = NULL;
+static NSString *gTrackPrefixText = nil;
+
+static Il2CppString *rm_track_prefix_literal(void) {
+    if (gTrackPrefixObj) return gTrackPrefixObj;
+    if (!gUnityBase) return NULL;
+
+    uintptr_t slot = gUnityBase + 0x4BA9660;
+    uintptr_t strAddr = 0;
+    if (!rm_safe_read(slot, &strAddr, sizeof(strAddr)) || strAddr < 0x100000000ULL) return NULL;
+
+    int32_t len = -1;
+    if (!rm_safe_read(strAddr + 0x10, &len, sizeof(len)) || len < 0 || len > 64) return NULL;
+    uint16_t buf[65] = {0};
+    if (len > 0 && !rm_safe_read(strAddr + 0x14, buf, (size_t)len * 2)) return NULL;
+    for (int i = 0; i < len; i++) {
+        if (buf[i] < 0x20 || buf[i] > 0x7E) return NULL;
+    }
+    gTrackPrefixText = len > 0 ? [[NSString alloc] initWithCharacters:buf length:(NSUInteger)len] : @"";
+    gTrackPrefixObj = (Il2CppString *)strAddr;
+    RMLog(@"曲目 id 前缀: \"%@\"（%d 字符）", gTrackPrefixText, len);
+    return gTrackPrefixObj;
+}
+
+// 拼出 PlayLevel 里那个完整字符串：prefix + Level.id
+static Il2CppString *rm_prefix_id(Il2CppString *levelId) {
+    if (!levelId || !il2cpp_string_new) return NULL;
+    Il2CppString *prefix = rm_track_prefix_literal();
+    NSString *p = prefix ? rm_il2cpp_string_text(prefix) : nil;
+    if (p == nil) p = @"";
+    NSString *l = rm_il2cpp_string_text(levelId);
+    if (!l) return NULL;
+    return il2cpp_string_new([[(p ?: @"") stringByAppendingString:l] UTF8String]);
+}
+
 static void rm_apply_unlock(void) {
     if (!RMUnlockAllSongs) {
         RMUnlockAllApplied = false;
@@ -1068,9 +1117,19 @@ static void rm_apply_unlock(void) {
 
     // 2) 关卡 id（ownedTracks / unlockedLevels，兜底）
     int added = 0;
+    int exactAdded = 0;
     for (int i = 0; i < count; i++) {
         Il2CppString *sid = (Il2CppString *)items[i];
         if (!sid) continue;
+        // PlayLevel / BeginOpenLevel 实际比对的是 prefix + Level.id
+        Il2CppString *full = rm_prefix_id(sid);
+        if (full) {
+            if (!rm_list_contains(owned, full)) {
+                rm_list_add(owned, full);
+                exactAdded++;
+            }
+            if (vip) rm_hashset_add(vip, full);
+        }
         if (!rm_list_contains(owned, sid)) {
             rm_list_add(owned, sid);
             added++;
@@ -1102,6 +1161,14 @@ static void rm_apply_unlock(void) {
                 if (!level) continue;
                 Il2CppString *sid = *(Il2CppString **)((char *)level + 0x10);   // Level.id
                 if (!sid) continue;
+                Il2CppString *full = rm_prefix_id(sid);
+                if (full) {
+                    if (!rm_list_contains(owned, full)) {
+                        rm_list_add(owned, full);
+                        exactAdded++;
+                    }
+                    if (vip) rm_hashset_add(vip, full);
+                }
                 if (!rm_list_contains(owned, sid)) {
                     rm_list_add(owned, sid);
                     added++;
@@ -1115,16 +1182,23 @@ static void rm_apply_unlock(void) {
 
     RMLastLevelIdCount = count;
     RMUnlockAllApplied = true;
-    int productAdded = rm_sync_owned_products();
-    if (added + trackAdded + itemAdded + productAdded > 0) {
+    // 商品表只需同步一次（与曲目解锁无关，仅让官方 Mod / 曲包按钮解锁）
+    static BOOL didProducts = NO;
+    int productAdded = 0;
+    if (!didProducts) {
+        productAdded = rm_sync_owned_products();
+        didProducts = YES;
+    }
+    if (added + trackAdded + itemAdded + productAdded + exactAdded > 0) {
         static BOOL verified = NO;
         bool ok = false;
         if (!verified && trackCount > 0 && trackIDs[0]) {
             verified = YES;
             ok = rm_track_unlocked((Il2CppString *)trackIDs[0]);
         }
-        RMLog(@"全曲解锁: 关卡 %d，曲目 id %d，新增 item %d / ownedTracks %d / 商品 %d（TrackUnlocked 校验=%d）",
-              count, trackCount, itemAdded, trackAdded + added, productAdded, ok ? 1 : 0);
+        RMLog(@"全曲解锁: 关卡 %d，曲目 id %d，新增 item %d / ownedTracks %d / 精确 id %d（前缀 \"%@\"）/ 商品 %d（TrackUnlocked 校验=%d）",
+              count, trackCount, itemAdded, trackAdded + added, exactAdded,
+              gTrackPrefixText ?: @"?", productAdded, ok ? 1 : 0);
         // 让选曲界面重新检查一次锁图标
         rm_call_static_void(gSelectClass, "RefreshAllPurchasableLocksGlobal");
     }
@@ -1834,6 +1908,7 @@ BOOL RMModsPanelScreenRect(CGRect *outRect) {
 void RMApplySettingsNow(void) {
     if (!RMIl2CppReady || !RMGameReady) return;
     rm_apply_mods();
+    if (RMUnlockAllSongs) rm_apply_unlock();
 }
 
 static CFTimeInterval gStartTime = 0;
@@ -1899,7 +1974,15 @@ static void rm_runtime_tick(void) {
         RMLog(@"心跳: 主线程正常 inLevel=%d disc=%d", RMInLevel ? 1 : 0, gLastDiscId);
     }
 
-    // v2：停止一切“假解锁”写入（改 getItems / 商品表 / 面板重建），只保留玩法 Mod
+    // 全曲解锁：写的是 TrackUnlocked 真正查询的那份数据（prefix + Level.id），
+    // 不重建面板、不改 UI。游戏会在切盘 / 回主界面时重建列表，所以低频补齐。
+    if (RMUnlockAllSongs && !RMInLevel) {
+        static CFTimeInterval lastUnlock = 0;
+        if (lastUnlock == 0 || now - lastUnlock > 5.0) {
+            lastUnlock = now;
+            rm_apply_unlock();
+        }
+    }
     return;
 }
 

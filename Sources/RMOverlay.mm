@@ -434,12 +434,16 @@ static UIWindowScene *rm_active_scene(void) {
 
 // ------------------------------ 资源 ------------------------------
 - (void)buildUnlock {
+    [self section:@"歌曲解锁"];
+    [self toggleRow:@"全曲解锁" detail:@"写入 TrackUnlocked 实际查询的曲目 id（prefix + Level.id）"
+                tag:RMRowUnlockAll on:RMUnlockAllSongs];
+
     [self section:@"歌曲资源"];
     [self buttonRow:@"下载缺失歌曲资源（增量）" action:@selector(onDownloadAssets)];
 
     UILabel *tip = [[UILabel alloc] initWithFrame:CGRectMake(22, _y, [self panelWidth] - 44, 46)];
-    tip.text = @"从官方 CDN 增量补齐 Documents/com.unity.addressables/aa/iOS 里缺失的 bundle，"
-               @"已存在的文件会跳过。";
+    tip.text = @"解锁只作用于本次运行的进程内，重启游戏需重新开启；不会改存档，也不会上传。"
+               @"资源下载会跳过已存在的文件。";
     tip.font = [UIFont systemFontOfSize:11];
     tip.textColor = [UIColor colorWithWhite:1 alpha:0.4];
     tip.numberOfLines = 2;

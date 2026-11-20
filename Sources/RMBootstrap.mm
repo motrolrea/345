@@ -20,7 +20,7 @@ static void RMBootstrap(void) {
     RMNoBad          = [d boolForKey:@"rm.nobad"];
     RMFreeHold       = [d boolForKey:@"rm.freehold"];
     RMLockHP         = [d boolForKey:@"rm.hp"];
-    RMUnlockAllSongs = [d boolForKey:@"rm.unlock"];
+    RMUnlockAllSongs = [d objectForKey:@"rm.unlock"] ? [d boolForKey:@"rm.unlock"] : YES;
     RMBallVisible    = [d objectForKey:@"rm.ball.show"] ? [d boolForKey:@"rm.ball.show"] : YES;
     RMAutoHideInGame = [d objectForKey:@"rm.ball.auto"] ? [d boolForKey:@"rm.ball.auto"] : YES;
     RMBallAlpha      = [d objectForKey:@"rm.ball.alpha"] ? [d floatForKey:@"rm.ball.alpha"] : 0.85f;
