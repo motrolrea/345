@@ -51,12 +51,8 @@ void RMInstallUploadBlocker(void);
 // 从远端资源服务器增量下载缺失的歌曲 bundle 到 Addressables 缓存
 void RMStartResourceDownload(void);
 
-// 官方 Mods 面板当前的屏幕区域（Unity 坐标换算成 UIKit 坐标）；面板收起时返回 NO
-BOOL RMModsPanelScreenRect(CGRect *outRect);
-// 当前场景里是否存在官方 Mods 面板（用于决定是否显示自定义开关条）
-BOOL RMModsPanelPresent(void);
-// 官方 Mods 面板是否已经展开（收起时不叠加任何自定义控件）
-BOOL RMModsPanelExpanded(void);
+// 长按 Mods 按钮时的说明气泡（主线程）
+void RMShowModHint(NSString *title, NSString *detail);
 
 #ifdef __cplusplus
 }

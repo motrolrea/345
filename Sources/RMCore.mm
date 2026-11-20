@@ -1422,272 +1422,95 @@ static void rm_watch_play_gate(void) {
 }
 
 // ---------------------------------------------------------------------------
-// 官方 Mods 面板位置（设置页 / 悬浮层把自定义开关贴在官方面板上）
+// 官方 Mods 栏接管（不克隆、不追加任何按钮）
+//   ModsControl 里固定 7 个按钮，只重定向其中两个：
+//     demoModButton (0x78) 官方“自动演示”   → 自动游玩（判定层，有成绩）
+//     hideModButton (0x70) 官方“隐藏计量条” → 锁血
+//   按钮对象、点击动画、长按进度条、收起/展开全部沿用官方实现，
+//   只替换 onClick / onLongPress 委托和 states[] 里的图标。
 // ---------------------------------------------------------------------------
-static void rm_log_mods_rect(NSString *reason) {
-    static NSString *last = nil;
-    static CFTimeInterval lastTime = 0;
-    CFTimeInterval now = CFAbsoluteTimeGetCurrent();
-    if (last && [last isEqualToString:reason] && now - lastTime < 10.0) return;
-    last = reason;
-    lastTime = now;
-    RMLog(@"Mods 面板: %@", reason);
+static void *gAutoPlayBtn = NULL;
+static void *gLockHPBtn = NULL;
+static void *gInstalledMods = NULL;
+static int gAutoBtnVis = -1;
+static int gLockBtnVis = -1;
+
+static void rm_sync_mod_buttons(void);
+
+static void rm_set_image_sprite(void *btn, Il2CppObject *spr) {
+    if (!btn || !spr) return;
+    void *img = *(void **)((char *)btn + 0x30);
+    if (!img) return;
+    Il2CppClass *k = il2cpp_object_get_class((Il2CppObject *)img);
+    const MethodInfo *m = k ? il2cpp_class_get_method_from_name(k, "set_sprite", 1) : NULL;
+    if (!m) return;
+    void *args[1] = {spr};
+    Il2CppException *e = NULL;
+    il2cpp_runtime_invoke(m, img, args, &e);
 }
 
-// ---------------------------------------------------------------------------
-// 官方 Mod 按钮解锁
-//   这些按钮在 Init 时按 ownedProducts 记录 isLocked，看起来像付费商品。
-//   直接对每个实例跑一遍 Unlock()（清 isLocked、换图标、播解锁动画），
-//   之后点击就是正常开关，不再弹购买。
-// ---------------------------------------------------------------------------
-static int rm_unlock_mod_buttons(void) {
-    if (!gModBtnClass || !gFindObjectsM1 || !il2cpp_class_get_type || !il2cpp_type_get_object) {
-        return 0;
-    }
-    Il2CppType *type = il2cpp_class_get_type(gModBtnClass);
-    void *typeObj = type ? il2cpp_type_get_object(type) : NULL;
-    if (!typeObj) return 0;
-    Il2CppException *exc = NULL;
-    void *args[1] = {typeObj};
-    Il2CppObject *arr = il2cpp_runtime_invoke(gFindObjectsM1, NULL, args, &exc);
-    if (exc || !arr) return 0;
-
-    const MethodInfo *mUnlock = il2cpp_class_get_method_from_name(gModBtnClass, "Unlock", 0);
-    if (!mUnlock) return 0;
-
-    NSUInteger n = rm_array_count(arr);
-    if (n > 256) n = 256;
-    void **elems = (void **)((char *)arr + kOff_Array_Elements);
-    int unlocked = 0;
-    for (NSUInteger i = 0; i < n; i++) {
-        void *btn = elems[i];
-        if (!btn) continue;
-        if (*(uint8_t *)((char *)btn + 0x98) == 0) continue;   // ModButtonControl.isLocked
-        // 只处理当前真正显示着的面板，别去动预热中的隐藏面板（会让切盘流程卡住）
-        void *btr = rm_call_obj0(btn, "get_transform");
-        void *bgo = btr ? rm_call_obj0(btr, "get_gameObject") : NULL;
-        if (!bgo || !rm_boxed_bool(rm_call_obj0(bgo, "get_activeInHierarchy"))) continue;
-        Il2CppException *e2 = NULL;
-        il2cpp_runtime_invoke(mUnlock, btn, NULL, &e2);
-        if (!e2) unlocked++;
-    }
-    if (unlocked > 0) RMLog(@"官方 Mod 解锁: %d 个按钮", unlocked);
-    return unlocked;
+static void rm_image_set_color(void *img, float r, float g, float b, float a) {
+    if (!img) return;
+    Il2CppClass *k = il2cpp_object_get_class((Il2CppObject *)img);
+    const MethodInfo *m = k ? il2cpp_class_get_method_from_name(k, "set_color", 1) : NULL;
+    if (!m) return;
+    float c[4] = {r, g, b, a};
+    void *args[1] = {c};
+    Il2CppException *e = NULL;
+    il2cpp_runtime_invoke(m, img, args, &e);
 }
 
-// ---------------------------------------------------------------------------
-// 在官方 Mods 条里追加自定义按钮
-//   克隆一个已初始化的 ModButtonControl（保留图标 / 动画 / 布局），挂到同一个父节点，
-//   布局组会把它排在官方按钮后面；点击回调换成我们伪造的 Action<int> 委托。
-// ---------------------------------------------------------------------------
-static void rm_chip_tap(void *target, int32_t index) {
-    int which = (int)index - 200;
-    if (which == 0) RMAutoPlay = !RMAutoPlay;
-    else if (which == 1) RMLockHP = !RMLockHP;
-    else return;
-    NSUserDefaults *d = NSUserDefaults.standardUserDefaults;
-    [d setBool:RMAutoPlay forKey:@"rm.auto"];
-    [d setBool:RMLockHP forKey:@"rm.hp"];
-    RMLog(@"官方 Mod 按钮: %d → 自动游玩=%d 锁血=%d", which, RMAutoPlay, RMLockHP);
-    RMApplySettingsNow();
-}
-
-// 复制一个现成的 Action<int> 委托对象，只把入口换成我们自己的 C 函数
-static Il2CppObject *rm_clone_action_delegate(Il2CppObject *proto) {
-    if (!proto || !il2cpp_object_new) return NULL;
-    Il2CppClass *k = il2cpp_object_get_class(proto);
-    if (!k) return NULL;
-    Il2CppObject *d = (Il2CppObject *)il2cpp_object_new(k);
-    if (!d) return NULL;
-    memcpy((char *)d + 0x10, (char *)proto + 0x10, 0x60);
-    *(void **)((char *)d + 0x10) = (void *)rm_chip_tap;   // method_ptr
-    *(void **)((char *)d + 0x20) = (void *)1;             // m_target（占位，不用）
-    return d;
-}
-
-static void *gCustomModsOwner = NULL;
-
-static void rm_append_custom_mods(void) {
-    if (!gModsClass || !gModBtnClass || !gObjectClass || !gGoClass || !gFindObjectsM1) return;
-
-    Il2CppType *mt = il2cpp_class_get_type(gModsClass);
-    void *mtObj = mt ? il2cpp_type_get_object(mt) : NULL;
-    if (!mtObj) return;
-    Il2CppException *exc = NULL;
-    void *args[1] = {mtObj};
-    Il2CppObject *modsArr = il2cpp_runtime_invoke(gFindObjectsM1, NULL, args, &exc);
-    if (exc || !modsArr) return;
-
-    NSUInteger n = rm_array_count(modsArr);
-    if (n == 0 || n > 32) return;
-    void **modsElems = (void **)((char *)modsArr + kOff_Array_Elements);
-
-    for (NSUInteger i = 0; i < n; i++) {
-        void *mods = modsElems[i];
-        if (!mods || mods == gCustomModsOwner) continue;
-        void *tr = rm_call_obj0(mods, "get_transform");
-        void *go = tr ? rm_call_obj0(tr, "get_gameObject") : NULL;
-        if (!go || !rm_boxed_bool(rm_call_obj0(go, "get_activeInHierarchy"))) continue;
-
-        void *buttons = *(void **)((char *)mods + 0xD8);   // ModsControl.modButtons
-        int count = buttons ? (int)rm_array_count(buttons) : 0;
-        if (count <= 0) continue;
-        void *tmpl = ((void **)((char *)buttons + kOff_Array_Elements))[count - 1];
-        if (!tmpl) continue;
-
-        void *tmplGo = rm_call_obj0(tmpl, "get_gameObject");
-        void *tmplTr = rm_call_obj0(tmpl, "get_transform");
-        void *parentTr = tmplTr ? rm_call_obj0(tmplTr, "get_parent") : NULL;
-        Il2CppObject *proto = (Il2CppObject *)*(void **)((char *)tmpl + 0xA8);   // onClick
-        if (!tmplGo || !parentTr || !proto) continue;
-
-        const MethodInfo *mInst = il2cpp_class_get_method_from_name(gObjectClass, "Instantiate", 2);
-        const MethodInfo *mGetComp = il2cpp_class_get_method_from_name(gGoClass, "GetComponent", 1);
-        Il2CppType *bt = il2cpp_class_get_type(gModBtnClass);
-        void *btObj = bt ? il2cpp_type_get_object(bt) : NULL;
-        if (!mInst || !mGetComp || !btObj) return;
-
-        Il2CppObject *delegate = rm_clone_action_delegate(proto);
-        if (!delegate) { RMLog(@"自定义 Mod: 委托复制失败"); return; }
-
-        // 官方这条 Mods 是手工布局（不是滑动列表），克隆体默认会叠在原位置，
-        // 这里把它们的 anchoredPosition 排到最后那个按钮下面一行。
-        float tmplX = 0, tmplY = 0, tmplW = 100, tmplH = 100;
-        {
-            Il2CppObject *rt = (Il2CppObject *)tmplTr;
-            Il2CppObject *posObj = rm_call_obj0(rt, "get_anchoredPosition");
-            Il2CppObject *sizeObj = rm_call_obj0(rt, "get_sizeDelta");
-            if (posObj) {
-                tmplX = *(float *)((char *)posObj + 0x10);
-                tmplY = *(float *)((char *)posObj + 0x14);
-            }
-            if (sizeObj) {
-                tmplW = *(float *)((char *)sizeObj + 0x10);
-                tmplH = *(float *)((char *)sizeObj + 0x14);
-            }
-        }
-        const MethodInfo *mSetPos = il2cpp_class_get_method_from_name(gRectTransformClass, "set_anchoredPosition", 1);
-
-        int added = 0;
-        for (int k = 0; k < 3; k++) {
-            void *instArgs[2] = {tmplGo, parentTr};
-            Il2CppException *e1 = NULL;
-            Il2CppObject *cloneGo = il2cpp_runtime_invoke(mInst, NULL, instArgs, &e1);
-            if (e1 || !cloneGo) break;
-            void *compArgs[1] = {btObj};
-            Il2CppException *e2 = NULL;
-            Il2CppObject *comp = il2cpp_runtime_invoke(mGetComp, cloneGo, compArgs, &e2);
-            if (e2 || !comp) break;
-            *(int *)((char *)comp + 0x70) = 200 + k;     // modIndex
-            *(uint8_t *)((char *)comp + 0x98) = 0;       // isLocked
-            *(uint8_t *)((char *)comp + 0xD8) = 0;       // onUnlockPopup
-            *(void **)((char *)comp + 0xA8) = delegate;  // onClick
-
-            if (mSetPos && tmplW > 1 && tmplH > 1) {
-                Il2CppObject *tr2 = rm_call_obj0(comp, "get_transform");
-                if (tr2) {
-                    // 官方那排上方新增一行：x 以模板为中心左右排开
-                    struct { float x, y; } p = { tmplX + (float)(k - 1) * (tmplW + 8),
-                                                 tmplY + tmplH + 8 };
-                    Il2CppException *e3 = NULL;
-                    void *pargs[1] = {&p};
-                    il2cpp_runtime_invoke(mSetPos, tr2, pargs, &e3);
-                }
-            }
-            const MethodInfo *mSetActive = il2cpp_class_get_method_from_name(gGoClass, "SetActive", 1);
-            if (mSetActive) {
-                uint8_t yes = 1;
-                void *sargs[1] = {&yes};
-                Il2CppException *e4 = NULL;
-                il2cpp_runtime_invoke(mSetActive, cloneGo, sargs, &e4);
-            }
-            // 克隆体继承的是“收起”状态（灰色圆球），调 Expand() 让它变成正常图标
-            const MethodInfo *mExpand = il2cpp_class_get_method_from_name(gModBtnClass, "Expand", 0);
-            if (mExpand) {
-                Il2CppException *e5 = NULL;
-                il2cpp_runtime_invoke(mExpand, comp, NULL, &e5);
-            }
-            if (k == 0) {
-                Il2CppObject *tr3 = rm_call_obj0(comp, "get_transform");
-                Il2CppObject *wp = tr3 ? rm_call_obj0(tr3, "get_position") : NULL;
-                if (wp) {
-                    float wx = *(float *)((char *)wp + 0x10);
-                    float wy = *(float *)((char *)wp + 0x14);
-                    float wz = *(float *)((char *)wp + 0x18);
-                    RMLog(@"自定义 Mod: 第1个克隆 world=(%.0f,%.0f,%.0f)", wx, wy, wz);
-                }
-            }
-            added++;
-        }
-        gCustomModsOwner = mods;
-
-        // 把官方 Mods 栏整体拉高一行，让新增的那排也在栏内
-        if (tmplH > 1) {
-            Il2CppObject *prt = rm_call_obj0(mods, "get_transform");
-            Il2CppObject *psz = prt ? rm_call_obj0(prt, "get_sizeDelta") : NULL;
-            Il2CppObject *pps = prt ? rm_call_obj0(prt, "get_anchoredPosition") : NULL;
-            const MethodInfo *mSetSize = il2cpp_class_get_method_from_name(gRectTransformClass, "set_sizeDelta", 1);
-            if (prt && psz && pps && mSetSize) {
-                float sw = *(float *)((char *)psz + 0x10);
-                float sh = *(float *)((char *)psz + 0x14);
-                float ax = *(float *)((char *)pps + 0x10);
-                float ay = *(float *)((char *)pps + 0x14);
-                struct { float x, y; } ns = { sw, sh + tmplH + 12 };
-                struct { float x, y; } np = { ax, ay + (tmplH + 12) / 2 };
-                Il2CppException *e6 = NULL, *e7 = NULL;
-                void *a1[1] = {&ns};
-                il2cpp_runtime_invoke(mSetSize, prt, a1, &e6);
-                void *a2[1] = {&np};
-                if (mSetPos) il2cpp_runtime_invoke(mSetPos, prt, a2, &e7);
-                RMLog(@"自定义 Mod: 面板加高 %.0f（原 %.0f×%.0f）", tmplH + 12, sw, sh);
-            }
-        }
-        RMLog(@"自定义 Mod: 追加 %d 个按钮（锁血 / 解锁 / 球）", added);
-        return;
-    }
-}
-
-
-// ---------------------------------------------------------------------------
-// 直接替换官方 Mods 条里的两个按钮：
-//   modButtons[5] 官方“自动演示” → 我们的“自动游玩（有成绩）”
-//   modButtons[1] 官方“生命条”   → 我们的“锁血”
-//   对象、图标、展开动画都用官方的，只换 modIndex 和点击回调。
-// ---------------------------------------------------------------------------
-static void *gHijackedMods = NULL;
-
-// 现场画 64x64 图标：0=自动游玩（绿圆+白色播放三角），1=锁血（红圆+白心）
-static Il2CppObject *rm_make_icon_sprite(int kind) {
-    if (!gTex2DClass || !gSpriteClass || !gColor32Class || !il2cpp_object_new || !il2cpp_array_new) {
+// 现场画原创图标（纯白形状 + alpha，最终颜色由官方 stateColors 着色）
+//   kind 0 = 自动游玩：外圈 + 播放三角
+//   kind 1 = 锁血：心形 + 钥匙孔
+//   filled = NO 时只画描边（关闭态）
+static Il2CppObject *rm_make_mod_sprite(int kind, BOOL filled) {
+    if (!gTex2DClass || !gSpriteClass || !gColor32Class || !il2cpp_object_new ||
+        !il2cpp_array_new || !il2cpp_class_get_method_from_name) {
         return NULL;
     }
-    const int S = 64;
+    const int S = 96;
     Il2CppArray *px = il2cpp_array_new(gColor32Class, (size_t)(S * S));
     if (!px) return NULL;
     uint8_t *p = (uint8_t *)px + kOff_Array_Elements;
     for (int y = 0; y < S; y++) {
         for (int x = 0; x < S; x++) {
             float fx = (x + 0.5f) / S * 2.0f - 1.0f;
-            float fy = (y + 0.5f) / S * 2.0f - 1.0f;
-            uint8_t r = 0, g = 0, b = 0, a = 0;
-            if (sqrtf(fx * fx + fy * fy) <= 0.95f) {
-                if (kind == 0) { r = 40; g = 200; b = 90; }
-                else { r = 225; g = 70; b = 75; }
-                a = 255;
-            }
+            float fy = 1.0f - (y + 0.5f) / S * 2.0f;   // 翻成数学坐标（y 向上）
+            float alpha = 0.0f;
             if (kind == 0) {
-                if (fx > -0.25f && fx < 0.45f && fabsf(fy) < (0.45f - fx) * 0.85f) {
-                    r = g = b = 255; a = 255;
+                float r = sqrtf(fx * fx + fy * fy);
+                if (r <= 0.97f && r >= 0.855f) alpha = 1.0f;
+                float tx = fx + 0.10f;
+                float ty = fy;
+                if (filled) {
+                    if (tx > -0.32f && tx < 0.46f && fabsf(ty) < (0.46f - tx) * 0.90f) alpha = 1.0f;
+                } else {
+                    if (tx > -0.32f && tx < 0.46f) {
+                        float half = (0.46f - tx) * 0.90f;
+                        if (fabsf(fabsf(ty) - half) < 0.075f) alpha = 1.0f;
+                        if (tx < -0.23f && fabsf(ty) < half) alpha = 1.0f;
+                    }
                 }
             } else {
-                float hx = fabsf(fx);
-                BOOL heart = NO;
-                if (fy > -0.10f && fy < 0.55f && hypotf(hx - 0.32f, fy - 0.22f) < 0.34f) heart = YES;
-                if (fy <= -0.10f && fy > -0.60f && hx < (0.66f + fy) * 0.95f) heart = YES;
-                if (heart) { r = g = b = 255; a = 255; }
+                float hx = fx * 1.16f;
+                float hy = fy * 1.16f + 0.10f;
+                float t = hx * hx + hy * hy - 0.62f;
+                float heart = t * t * t - hx * hx * hy * hy * hy * 1.55f;
+                if (filled) {
+                    if (heart <= 0.0f) alpha = 1.0f;
+                } else {
+                    if (fabsf(heart) < 0.055f) alpha = 1.0f;
+                }
+                // 钥匙孔（挖空）
+                if (hypotf(fx, fy - 0.14f) < 0.155f) alpha = 0.0f;
+                if (fabsf(fx) < 0.072f && fy < 0.02f && fy > -0.40f) alpha = 0.0f;
             }
             uint8_t *q = p + (y * S + x) * 4;
-            q[0] = r; q[1] = g; q[2] = b; q[3] = a;
+            q[0] = 255;
+            q[1] = 255;
+            q[2] = 255;
+            q[3] = (uint8_t)(alpha * 255.0f);
         }
     }
 
@@ -1721,36 +1544,148 @@ static Il2CppObject *rm_make_icon_sprite(int kind) {
     return il2cpp_runtime_invoke(mCreate, NULL, a3, &e3);
 }
 
-static void rm_set_image_sprite(void *btn, Il2CppObject *spr) {
-    if (!btn || !spr) return;
+static void rm_install_button_icons(void *btn, int kind) {
+    if (!btn) return;
+    void *states = *(void **)((char *)btn + 0x68);
+    if (!states) return;
+    int n = (int)rm_array_count(states);
+    if (n <= 0) return;
+    if (n > 4) n = 4;
+    Il2CppObject *on = rm_make_mod_sprite(kind, YES);
+    Il2CppObject *off = rm_make_mod_sprite(kind, NO);
+    if (!on && !off) return;
+    void **elems = (void **)((char *)states + kOff_Array_Elements);
+    for (int i = 0; i < n; i++) {
+        Il2CppObject *spr = (i == 0) ? (off ? off : on) : on;
+        if (spr) elems[i] = spr;
+    }
+}
+
+// 复制一个官方 Action<int> 委托，只把入口换成我们的 C 函数
+//   Click / Update 走的是 delegate->invoke_impl(method_code, arg, method)，
+//   所以 method_code(0x40) 必须一起换掉；m_target 保留原值（ModsControl 实例）。
+static Il2CppObject *rm_clone_action_int(Il2CppObject *proto, void *fn) {
+    if (!proto || !il2cpp_object_new) return NULL;
+    Il2CppClass *k = il2cpp_object_get_class(proto);
+    if (!k) return NULL;
+    Il2CppObject *d = (Il2CppObject *)il2cpp_object_new(k);
+    if (!d) return NULL;
+    memcpy((char *)d + 0x10, (char *)proto + 0x10, 0x60);
+    *(void **)((char *)d + 0x10) = fn;   // method_ptr
+    *(void **)((char *)d + 0x40) = fn;   // method_code（实际跳转用这个）
+    return d;
+}
+
+static void rm_tap_autoplay(void *self, int32_t state) {
+    (void)self;
+    (void)state;
+    RMAutoPlay = !RMAutoPlay;
+    [NSUserDefaults.standardUserDefaults setBool:RMAutoPlay forKey:@"rm.auto"];
+    RMLog(@"Mods 栏点击: 自动游玩 → %@", RMAutoPlay ? @"开" : @"关");
+    gAutoBtnVis = -1;
+    rm_sync_mod_buttons();
+    RMApplySettingsNow();
+}
+
+static void rm_tap_lockhp(void *self, int32_t state) {
+    (void)self;
+    (void)state;
+    RMLockHP = !RMLockHP;
+    [NSUserDefaults.standardUserDefaults setBool:RMLockHP forKey:@"rm.hp"];
+    RMLog(@"Mods 栏点击: 锁血 → %@", RMLockHP ? @"开" : @"关");
+    gLockBtnVis = -1;
+    rm_sync_mod_buttons();
+    RMApplySettingsNow();
+}
+
+static void rm_long_autoplay(void *self, int32_t idx) {
+    (void)self;
+    (void)idx;
+    RMShowModHint(@"自动游玩",
+                  @"自动击打全部音符，正常结算成绩。\n与官方“自动演示”不同：演示不计成绩。");
+}
+
+static void rm_long_lockhp(void *self, int32_t idx) {
+    (void)self;
+    (void)idx;
+    RMShowModHint(@"锁血",
+                  @"游玩中生命值锁定为满，Miss / Bad 不会掉血，也不会中途失败。");
+}
+
+static void rm_install_one(void *btn, int kind,
+                           void (*tap)(void *, int32_t),
+                           void (*lp)(void *, int32_t)) {
+    if (!btn) return;
+    Il2CppObject *protoTap = (Il2CppObject *)*(void **)((char *)btn + 0xA8);
+    Il2CppObject *protoLP = (Il2CppObject *)*(void **)((char *)btn + 0xB0);
+    if (protoTap) {
+        Il2CppObject *d = rm_clone_action_int(protoTap, (void *)tap);
+        if (d) *(void **)((char *)btn + 0xA8) = d;
+    }
+    if (protoLP) {
+        Il2CppObject *d = rm_clone_action_int(protoLP, (void *)lp);
+        if (d) *(void **)((char *)btn + 0xB0) = d;
+    }
+    *(uint8_t *)((char *)btn + 0x98) = 0;   // isLocked（不播放解锁动画，避免收起态灰球）
+    *(uint8_t *)((char *)btn + 0xD8) = 0;   // onUnlockPopup
+    rm_install_button_icons(btn, kind);
+}
+
+static BOOL rm_button_bound_to(void *btn, void *fn) {
+    if (!btn) return NO;
+    Il2CppObject *d = (Il2CppObject *)*(void **)((char *)btn + 0xA8);
+    if (!d) return NO;
+    return *(void **)((char *)d + 0x40) == fn;
+}
+
+static void rm_apply_button_visual(void *btn, BOOL on) {
+    if (!btn) return;
+    void *states = *(void **)((char *)btn + 0x68);
+    if (!states) return;
+    int n = (int)rm_array_count(states);
+    if (n <= 0) return;
+    int idx = (on && n > 1) ? 1 : 0;
+    *(int *)((char *)btn + 0x88) = idx;     // State
     void *img = *(void **)((char *)btn + 0x30);
     if (!img) return;
-    Il2CppClass *k = il2cpp_object_get_class((Il2CppObject *)img);
-    const MethodInfo *m = k ? il2cpp_class_get_method_from_name(k, "set_sprite", 1) : NULL;
-    if (!m) return;
-    void *args[1] = {spr};
-    Il2CppException *e = NULL;
-    il2cpp_runtime_invoke(m, img, args, &e);
+    void *colors = *(void **)((char *)btn + 0x78);
+    int cn = colors ? (int)rm_array_count(colors) : 0;
+    if (cn > 0) {
+        int ci = idx < cn ? idx : cn - 1;
+        float *c = (float *)((char *)colors + kOff_Array_Elements + (size_t)ci * 16);
+        rm_image_set_color(img, c[0], c[1], c[2], c[3]);
+    }
+    Il2CppObject *spr = ((Il2CppObject **)((char *)states + kOff_Array_Elements))[idx];
+    if (spr) rm_set_image_sprite(btn, spr);
 }
 
-// 把 src 按钮当前显示的图标复制到 dst 按钮上
-static void rm_copy_image_sprite(void *dst, void *src) {
-    if (!dst || !src) return;
-    void *dstImg = *(void **)((char *)dst + 0x30);
-    void *srcImg = *(void **)((char *)src + 0x30);
-    if (!dstImg || !srcImg) return;
-    Il2CppObject *spr = rm_call_obj0(srcImg, "get_sprite");
-    if (!spr) return;
-    Il2CppClass *k = il2cpp_object_get_class((Il2CppObject *)dstImg);
-    const MethodInfo *m = k ? il2cpp_class_get_method_from_name(k, "set_sprite", 1) : NULL;
-    if (!m) return;
-    void *args[1] = {spr};
-    Il2CppException *e = NULL;
-    il2cpp_runtime_invoke(m, dstImg, args, &e);
+static void rm_sync_mod_buttons(void) {
+    if (gAutoPlayBtn && (int)RMAutoPlay != gAutoBtnVis) {
+        gAutoBtnVis = RMAutoPlay ? 1 : 0;
+        rm_apply_button_visual(gAutoPlayBtn, RMAutoPlay);
+    }
+    if (gLockHPBtn && (int)RMLockHP != gLockBtnVis) {
+        gLockBtnVis = RMLockHP ? 1 : 0;
+        rm_apply_button_visual(gLockHPBtn, RMLockHP);
+    }
 }
 
-static void rm_hijack_mod_buttons(void) {
-    if (!gModsClass || !gModBtnClass || !gFindObjectsM1) return;
+// 清掉官方按钮的付费锁：只改标志位，不调 Unlock()（那会留下灰色圆球）
+static void rm_clear_button_locks(void *mods) {
+    void *buttons = *(void **)((char *)mods + 0xD8);
+    int n = buttons ? (int)rm_array_count(buttons) : 0;
+    if (n <= 0 || n > 32) return;
+    void **b = (void **)((char *)buttons + kOff_Array_Elements);
+    for (int i = 0; i < n; i++) {
+        void *btn = b[i];
+        if (!btn) continue;
+        *(uint8_t *)((char *)btn + 0x98) = 0;
+        *(uint8_t *)((char *)btn + 0xD8) = 0;
+    }
+}
+
+static void rm_install_mod_replacements(void) {
+    if (!gModsClass || !gFindObjectsM1 || !il2cpp_class_get_type || !il2cpp_type_get_object) return;
     Il2CppType *mt = il2cpp_class_get_type(gModsClass);
     void *mtObj = mt ? il2cpp_type_get_object(mt) : NULL;
     if (!mtObj) return;
@@ -1764,157 +1699,39 @@ static void rm_hijack_mod_buttons(void) {
 
     for (NSUInteger i = 0; i < n; i++) {
         void *mods = elems[i];
-        if (!mods || mods == gHijackedMods) continue;
-        void *tr = rm_call_obj0(mods, "get_transform");
-        void *go = tr ? rm_call_obj0(tr, "get_gameObject") : NULL;
-        if (!go || !rm_boxed_bool(rm_call_obj0(go, "get_activeInHierarchy"))) continue;
-
-        void *buttons = *(void **)((char *)mods + 0xD8);
-        int count = buttons ? (int)rm_array_count(buttons) : 0;
-        if (count < 7) continue;
-        void **b = (void **)((char *)buttons + kOff_Array_Elements);
-        void *demo = b[5];
-        void *life = b[1];
-        if (!demo || !life) continue;
-
-        Il2CppObject *proto = (Il2CppObject *)*(void **)((char *)demo + 0xA8);
-        Il2CppObject *d = rm_clone_action_delegate(proto);
-        if (!d) { RMLog(@"官方 Mod 替换: 委托复制失败"); return; }
-
-        *(int *)((char *)demo + 0x70) = 200;
-        *(void **)((char *)demo + 0xA8) = d;
-        *(uint8_t *)((char *)demo + 0x98) = 0;
-        *(int *)((char *)life + 0x70) = 201;
-        *(void **)((char *)life + 0xA8) = d;
-        *(uint8_t *)((char *)life + 0x98) = 0;
-        // 图标先借用另外两个官方 sprite（生成的贴图在部分 UI 材质上不显示）
-        rm_copy_image_sprite(demo, b[0]);
-        rm_copy_image_sprite(life, b[3]);
-        gHijackedMods = mods;
-        RMLog(@"官方 Mod 按钮已替换: 自动演示→自动游玩，生命条→锁血");
-        return;
-    }
-}
-
-static void rm_image_set_color(void *img, float r, float g, float b, float a) {
-    if (!img) return;
-    Il2CppClass *k = il2cpp_object_get_class((Il2CppObject *)img);
-    const MethodInfo *m = k ? il2cpp_class_get_method_from_name(k, "set_color", 1) : NULL;
-    if (!m) return;
-    float c[4] = {r, g, b, a};
-    void *args[1] = {c};
-    Il2CppException *e = NULL;
-    il2cpp_runtime_invoke(m, img, args, &e);
-}
-
-// 让被替换的两个官方按钮的图标颜色跟着开关变，至少能看出状态
-static void rm_refresh_hijacked_visuals(void) {
-    if (!gHijackedMods) return;
-    void *buttons = *(void **)((char *)gHijackedMods + 0xD8);
-    int count = buttons ? (int)rm_array_count(buttons) : 0;
-    if (count < 7) return;
-    void **b = (void **)((char *)buttons + kOff_Array_Elements);
-    void *demo = b[5];
-    void *life = b[1];
-    if (demo) {
-        rm_image_set_color(*(void **)((char *)demo + 0x30), 1, 1, 1, 1);
-    }
-    if (life) {
-        rm_image_set_color(*(void **)((char *)life + 0x30), 1, 1, 1, 1);
-    }
-}
-
-
-BOOL RMModsPanelPresent(void) {
-    if (!gModsClass || !gFindObjectsM1 || !il2cpp_class_get_type || !il2cpp_type_get_object) return NO;
-    Il2CppType *type = il2cpp_class_get_type(gModsClass);
-    void *typeObj = type ? il2cpp_type_get_object(type) : NULL;
-    if (!typeObj) return NO;
-    Il2CppException *exc = NULL;
-    void *args[1] = {typeObj};
-    Il2CppObject *arr = il2cpp_runtime_invoke(gFindObjectsM1, NULL, args, &exc);
-    if (exc || !arr) return NO;
-    return rm_array_count(arr) > 0;
-}
-
-BOOL RMModsPanelExpanded(void) {
-    if (!gModsClass) return NO;
-    const MethodInfo *m = il2cpp_class_get_method_from_name(gModsClass, "get_IsExpanded", 0);
-    if (!m) return NO;
-    Il2CppException *exc = NULL;
-    Il2CppObject *boxed = il2cpp_runtime_invoke(m, NULL, NULL, &exc);
-    if (exc || !boxed) return NO;
-    return rm_boxed_bool(boxed);
-}
-
-BOOL RMModsPanelScreenRect(CGRect *outRect) {
-    if (!outRect) return NO;
-    if (!gModsClass || !gFindObjectsM1 || !il2cpp_class_get_type || !il2cpp_type_get_object) {
-        rm_log_mods_rect(@"缺少 ModsControl / FindObjectsOfType");
-        return NO;
-    }
-    Il2CppType *type = il2cpp_class_get_type(gModsClass);
-    void *typeObj = type ? il2cpp_type_get_object(type) : NULL;
-    if (!typeObj) { rm_log_mods_rect(@"ModsControl 类型对象缺失"); return NO; }
-
-    Il2CppException *exc = NULL;
-    void *args[1] = {typeObj};
-    Il2CppObject *arr = il2cpp_runtime_invoke(gFindObjectsM1, NULL, args, &exc);
-    if (exc || !arr) { rm_log_mods_rect(@"FindObjectsOfType 失败"); return NO; }
-
-    NSUInteger n = rm_array_count(arr);
-    if (n == 0) { rm_log_mods_rect(@"未找到 ModsControl"); return NO; }
-    if (n > 64) n = 64;
-
-    CGSize screen = UIScreen.mainScreen.bounds.size;
-    void **elems = (void **)((char *)arr + kOff_Array_Elements);
-    NSString *lastReason = @"无可用实例";
-    for (NSUInteger i = 0; i < n; i++) {
-        void *mods = elems[i];
         if (!mods) continue;
         void *tr = rm_call_obj0(mods, "get_transform");
         void *go = tr ? rm_call_obj0(tr, "get_gameObject") : NULL;
         if (!go || !rm_boxed_bool(rm_call_obj0(go, "get_activeInHierarchy"))) continue;
 
-        Il2CppObject *posObj = rm_call_obj0(tr, "get_position");
-        Il2CppObject *scaleObj = rm_call_obj0(tr, "get_lossyScale");
-        Il2CppObject *rectObj = rm_call_obj0(tr, "get_rect");
-        if (!posObj || !scaleObj || !rectObj) { lastReason = @"属性读取失败"; continue; }
+        rm_clear_button_locks(mods);
 
-        float px = *(float *)((char *)posObj + 0x10);
-        float py = *(float *)((char *)posObj + 0x14);
-        float sx = *(float *)((char *)scaleObj + 0x10);
-        float sy = *(float *)((char *)scaleObj + 0x14);
-        float rw = *(float *)((char *)rectObj + 0x18);
-        float rh = *(float *)((char *)rectObj + 0x1C);
-        if (!(rw > 0) || !(rh > 0) || !(sx > 0) || !(sy > 0)) {
-            lastReason = [NSString stringWithFormat:@"数值无效 pos=(%.0f,%.0f) scale=(%.2f,%.2f) rect=(%.0f,%.0f)",
-                          px, py, sx, sy, rw, rh];
-            continue;
+        void *demo = *(void **)((char *)mods + 0x78);
+        void *hide = *(void **)((char *)mods + 0x70);
+        if (!demo || !hide) continue;
+        if (mods == gInstalledMods && rm_button_bound_to(demo, (void *)rm_tap_autoplay) &&
+            rm_button_bound_to(hide, (void *)rm_tap_lockhp)) {
+            return;
         }
 
-        CGFloat w = rw * sx;
-        CGFloat h = rh * sy;
-        CGRect r = CGRectMake(px - w / 2, screen.height - py - h / 2, w, h);
-        if (r.size.width < 40 || r.size.width > screen.width * 2) {
-            lastReason = [NSString stringWithFormat:@"尺寸异常 %.0f×%.0f", w, h];
-            continue;
-        }
-        if (r.origin.y < -600 || r.origin.y > screen.height + 600) {
-            lastReason = [NSString stringWithFormat:@"位置异常 (%.0f,%.0f)", r.origin.x, r.origin.y];
-            continue;
-        }
-        *outRect = r;
-        return YES;
+        rm_install_one(demo, 0, rm_tap_autoplay, rm_long_autoplay);
+        rm_install_one(hide, 1, rm_tap_lockhp, rm_long_lockhp);
+        gAutoPlayBtn = demo;
+        gLockHPBtn = hide;
+        gInstalledMods = mods;
+        gAutoBtnVis = -1;
+        gLockBtnVis = -1;
+        rm_sync_mod_buttons();
+        RMLog(@"Mods 栏接管: 自动演示→自动游玩，隐藏计量条→锁血");
+        return;
     }
-    rm_log_mods_rect(lastReason);
-    return NO;
 }
 
 // ---------------------------------------------------------------------------
 // 对外接口
 // ---------------------------------------------------------------------------
 void RMApplySettingsNow(void) {
+    rm_sync_mod_buttons();
     if (!RMIl2CppReady || !RMGameReady) return;
     rm_apply_mods();
     if (RMUnlockAllSongs) rm_apply_unlock();
@@ -1969,11 +1786,8 @@ static void rm_runtime_tick(void) {
     if (now - gLastModUnlock > 2.0) {
         gLastModUnlock = now;
         if (!RMInLevel) {
-            rm_unlock_mod_buttons();
-            // 按钮替换先停用：会把官方按钮颜色改成白色，且与官方原本的
-            // 生命条等功能叠加（三重效果），先回滚保证稳定
-            // rm_hijack_mod_buttons();
-            // rm_refresh_hijacked_visuals();
+            rm_install_mod_replacements();
+            rm_sync_mod_buttons();
         }
     }
 
