@@ -51,9 +51,6 @@ void RMInstallUploadBlocker(void);
 // 从远端资源服务器增量下载缺失的歌曲 bundle 到 Addressables 缓存
 void RMStartResourceDownload(void);
 
-// 长按 Mods 按钮时的说明气泡（主线程）
-void RMShowModHint(NSString *title, NSString *detail);
-
 #ifdef __cplusplus
 }
 #endif
