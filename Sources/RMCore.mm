@@ -1837,6 +1837,16 @@ BOOL RMModsPanelPresent(void) {
     return rm_array_count(arr) > 0;
 }
 
+BOOL RMModsPanelExpanded(void) {
+    if (!gModsClass) return NO;
+    const MethodInfo *m = il2cpp_class_get_method_from_name(gModsClass, "get_IsExpanded", 0);
+    if (!m) return NO;
+    Il2CppException *exc = NULL;
+    Il2CppObject *boxed = il2cpp_runtime_invoke(m, NULL, NULL, &exc);
+    if (exc || !boxed) return NO;
+    return rm_boxed_bool(boxed);
+}
+
 BOOL RMModsPanelScreenRect(CGRect *outRect) {
     if (!outRect) return NO;
     if (!gModsClass || !gFindObjectsM1 || !il2cpp_class_get_type || !il2cpp_type_get_object) {

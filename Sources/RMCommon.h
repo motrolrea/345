@@ -55,6 +55,8 @@ void RMStartResourceDownload(void);
 BOOL RMModsPanelScreenRect(CGRect *outRect);
 // 当前场景里是否存在官方 Mods 面板（用于决定是否显示自定义开关条）
 BOOL RMModsPanelPresent(void);
+// 官方 Mods 面板是否已经展开（收起时不叠加任何自定义控件）
+BOOL RMModsPanelExpanded(void);
 
 #ifdef __cplusplus
 }

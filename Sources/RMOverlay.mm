@@ -992,11 +992,21 @@ static void rm_dock_set(NSInteger tag, BOOL on) {
 
 @implementation RMModsDockView {
     NSMutableArray<RMModChip *> *_chips;
+    UILabel *_titleLabel;
 }
 
 - (instancetype)initWithFrame:(CGRect)frame {
     if ((self = [super initWithFrame:frame])) {
         self.backgroundColor = UIColor.clearColor;
+
+        _titleLabel = [[UILabel alloc] initWithFrame:CGRectMake(0, 0, frame.size.width, 14)];
+        _titleLabel.text = @"RizlineMod · 自定义";
+        _titleLabel.font = [UIFont systemFontOfSize:10 weight:UIFontWeightSemibold];
+        _titleLabel.textColor = [UIColor colorWithWhite:1 alpha:0.75];
+        _titleLabel.textAlignment = NSTextAlignmentCenter;
+        _titleLabel.userInteractionEnabled = NO;
+        [self addSubview:_titleLabel];
+
         _chips = [NSMutableArray array];
         NSArray<NSNumber *> *tags = rm_dock_tags();
         NSArray<NSString *> *titles = rm_dock_titles();
@@ -1037,7 +1047,7 @@ static void rm_dock_set(NSInteger tag, BOOL on) {
 }
 
 - (CGFloat)heightForWidth:(CGFloat)width {
-    return 46;
+    return 64;
 }
 
 - (void)applyWidth:(CGFloat)width {
@@ -1048,9 +1058,10 @@ static void rm_dock_set(NSInteger tag, BOOL on) {
     CGFloat used = chipW * n + gap * (n - 1);
     CGFloat x0 = (width - used) / 2;
     for (NSInteger i = 0; i < n; i++) {
-        _chips[i].frame = CGRectMake(x0 + i * (chipW + gap), 0, chipW, 46);
+        _chips[i].frame = CGRectMake(x0 + i * (chipW + gap), 18, chipW, 46);
     }
-    self.frame = CGRectMake(0, 0, width, 46);
+    _titleLabel.frame = CGRectMake(0, 0, width, 14);
+    self.frame = CGRectMake(0, 0, width, 64);
 }
 
 @end
@@ -1060,19 +1071,32 @@ static UIWindow *gDockWindow = nil;
 static void rm_update_dock(void) {
     if (!gDockWindow) return;
     BOOL gameplay = rm_in_gameplay();
-    BOOL show = !gPanelWindow && RMModsPanelPresent() && !(RMAutoHideInGame && gameplay);
+    // 只在官方 Mods 面板真正展开时才叠加自定义开关：
+    // 收起态（一个圆形按钮）完全不碰，既不会挡住点击，也不会出现多余圆球。
+    BOOL show = !gPanelWindow && RMModsPanelExpanded() && !(RMAutoHideInGame && gameplay);
     if (!show) {
         gDockWindow.hidden = YES;
         return;
     }
     UIWindowScene *scene = rm_active_scene();
     CGRect sb = scene ? scene.coordinateSpace.bounds : UIScreen.mainScreen.bounds;
-    // 官方 Mods 条在选曲页中部；自定义开关作为第二行贴在它下面（按屏幕比例定位）
-    CGFloat width = sb.size.width * 0.81;
-    CGFloat x = sb.size.width * 0.095;
-    CGFloat y = sb.size.height * 0.255;
     RMModsDockView *dock = (RMModsDockView *)gDockWindow.rootViewController.view.subviews.firstObject;
     if (!dock) return;
+
+    CGFloat width, x, y;
+    CGRect panel = CGRectZero;
+    if (RMModsPanelScreenRect(&panel) && panel.size.width > 100) {
+        // 贴住官方面板：同宽、居中、放在它下面一行
+        width = MAX(240.0, MIN(sb.size.width - 24.0, panel.size.width));
+        x = panel.origin.x + (panel.size.width - width) / 2;
+        x = MAX(12.0, MIN(sb.size.width - width - 12.0, x));
+        y = panel.origin.y + panel.size.height + 6;
+        if (y + 64 > sb.size.height - 12) y = MAX(12.0, panel.origin.y - 70);
+    } else {
+        width = sb.size.width * 0.81;
+        x = sb.size.width * 0.095;
+        y = sb.size.height * 0.255;
+    }
     [dock applyWidth:width];
     CGFloat h = dock.bounds.size.height;
     gDockWindow.frame = CGRectMake(x, y, width, h);
@@ -1082,7 +1106,7 @@ static void rm_update_dock(void) {
     if (fabs(logged.origin.x - x) > 1 || fabs(logged.origin.y - y) > 1 ||
         fabs(logged.size.width - width) > 1) {
         logged = CGRectMake(x, y, width, h);
-        RMLog(@"Mods 快捷条: (%.0f,%.0f,%.0f,%.0f)", x, y, width, h);
+        RMLog(@"Mods 自定义条: (%.0f,%.0f,%.0f,%.0f)", x, y, width, h);
     }
 }
 
