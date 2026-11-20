@@ -135,7 +135,7 @@ static UIBezierPath *RMSlant(CGRect r, CGFloat ratio) {
     if ((self = [super initWithFrame:frame])) {
         self.backgroundColor = UIColor.clearColor;
         self.opaque = NO;
-        NSArray *names = @[@"玩法", @"解锁", @"界面", @"诊断"];
+        NSArray *names = @[@"玩法", @"资源", @"界面", @"诊断"];
         NSMutableArray *bs = [NSMutableArray array];
         for (NSInteger i = 0; i < names.count; i++) {
             UIButton *b = [UIButton buttonWithType:UIButtonTypeCustom];
@@ -432,17 +432,14 @@ static UIWindowScene *rm_active_scene(void) {
     _y += 52;
 }
 
-// ------------------------------ 解锁 ------------------------------
+// ------------------------------ 资源 ------------------------------
 - (void)buildUnlock {
-    [self section:@"本地解锁（不写存档 / 不上传）"];
-    [self toggleRow:@"全曲解锁" detail:@"写入本地登录态的曲目拥有列表（User.getItems）"
-                tag:RMRowUnlockAll on:RMUnlockAllSongs];
-
+    [self section:@"歌曲资源"];
     [self buttonRow:@"下载缺失歌曲资源（增量）" action:@selector(onDownloadAssets)];
 
     UILabel *tip = [[UILabel alloc] initWithFrame:CGRectMake(22, _y, [self panelWidth] - 44, 46)];
-    tip.text = @"解锁只存在于本次运行的进程内：重启游戏后需要重新开启。"
-               @"不会修改存档、不会同步到服务器，也不会解锁付费商品。";
+    tip.text = @"从官方 CDN 增量补齐 Documents/com.unity.addressables/aa/iOS 里缺失的 bundle，"
+               @"已存在的文件会跳过。";
     tip.font = [UIFont systemFontOfSize:11];
     tip.textColor = [UIColor colorWithWhite:1 alpha:0.4];
     tip.numberOfLines = 2;
@@ -653,12 +650,11 @@ static UIWindowScene *rm_active_scene(void) {
     gStatusLabel.text = [NSString stringWithFormat:
         @"模式: 反射轮询（不改代码页）   il2cpp: %@\n"
         @"游戏界面: %@   游玩中: %@\n"
-        @"音符: %d   曲目: %d   全曲解锁: %@",
+        @"音符: %d   选曲池: %d",
         RMIl2CppReady ? @"OK" : @"N/A",
         RMGameReady ? @"已就绪" : @"未就绪",
         RMInLevel ? @"是" : @"否",
-        RMLastNoteCount, RMLastLevelIdCount,
-        RMUnlockAllApplied ? @"已应用" : @"未应用"];
+        RMLastNoteCount, RMLastLevelIdCount];
 }
 
 - (void)onShowLog {
