@@ -1316,52 +1316,15 @@ static void rm_watch_play_gate(void) {
 
     if (!levelId) return;
 
-    // 选曲面板（BeginOpenLevel）用的是 Level.musicInfo.id；
-    // 进关判定（PlayLevel）用的是 Level.id。两个都补齐。
+    // v2：只读状态用于日志，不再写 User.getItems / 商品表 / 重建面板
     void *music = *(void **)((char *)level + 0x20);
     Il2CppString *musicId = music ? *(Il2CppString **)((char *)music + 0x10) : NULL;
-
-    Il2CppString *trackId = rm_level_track_id(levelId);
-    BOOL unlocked = rm_track_unlocked(trackId);
+    BOOL unlocked = rm_track_unlocked(rm_level_track_id(levelId));
     BOOL musicUnlocked = musicId ? rm_track_unlocked(musicId) : NO;
-
-    Il2CppObject *user = rm_payment_user();
-    void *items = user ? *(void **)((char *)user + kOff_User_Items) : NULL;
-    if (items) {
-        if (!unlocked && rm_owned_add(items, trackId)) {
-            unlocked = YES;
-            RMLog(@"开始按钮: 补写曲目 id %@", rm_il2cpp_string_text(trackId) ?: @"?");
-        }
-        if (musicId && !musicUnlocked && rm_owned_add(items, musicId)) {
-            musicUnlocked = YES;
-            RMLog(@"开始按钮: 补写 musicId %@", rm_il2cpp_string_text(musicId) ?: @"?");
-        }
-    }
-
-    // 面板打开时若按“未解锁”渲染（显示 解锁/￥6.00），这里按最新拥有状态重建一次
-    static void *lastPanelLevel = NULL;
-    if (level != lastPanelLevel) {
-        lastPanelLevel = level;
-        void *sic = *(void **)((char *)sel + 0x48);   // LevelSelectControl.songInfoControl
-        if (sic) {
-            Il2CppClass *k = il2cpp_object_get_class((Il2CppObject *)sic);
-            const MethodInfo *m = k ? il2cpp_class_get_method_from_name(k, "SetData", 3) : NULL;
-            if (m) {
-                uint8_t f = 0, o = 0;
-                void *a[3] = {level, &f, &o};
-                Il2CppException *e = NULL;
-                il2cpp_runtime_invoke(m, sic, a, &e);
-                RMLog(@"选曲面板: 按解锁状态重建 %@", e ? @"失败" : @"成功");
-            }
-        }
-    }
-
-    rm_probe_purchase();
-
-    uint8_t onPlay = *(uint8_t *)((char *)sel + 0x20C);
 
     // PlayLevel 一进来就 return 的条件之一就是 onPlay；一旦首次点击后加载失败，
     // onPlay 会一直停在 1，之后所有点击都“没反应”。这里超时复位，恢复可点击。
+    uint8_t onPlay = *(uint8_t *)((char *)sel + 0x20C);
     static CFTimeInterval onPlaySince = 0;
     if (onPlay) {
         if (onPlaySince == 0) onPlaySince = CFAbsoluteTimeGetCurrent();
@@ -1871,7 +1834,6 @@ BOOL RMModsPanelScreenRect(CGRect *outRect) {
 void RMApplySettingsNow(void) {
     if (!RMIl2CppReady || !RMGameReady) return;
     rm_apply_mods();
-    if (RMUnlockAllSongs) rm_apply_unlock();
 }
 
 static CFTimeInterval gStartTime = 0;
@@ -1937,14 +1899,8 @@ static void rm_runtime_tick(void) {
         RMLog(@"心跳: 主线程正常 inLevel=%d disc=%d", RMInLevel ? 1 : 0, gLastDiscId);
     }
 
-    // 结算期间和刚出关的几秒内不做解锁写入，避免和存档/结算抢数据
-    double sincePlay = CFAbsoluteTimeGetCurrent() - RMLastGameplayTick;
-    if (RMUnlockAllSongs && now - gLastUnlock > 5.0 && now > gDiscSwitchUntil &&
-        !RMInLevel && sincePlay > 6.0) {
-        gLastUnlock = now;
-        if (!gLevelCtlObj) rm_refresh_objects();
-        rm_apply_unlock();
-    }
+    // v2：停止一切“假解锁”写入（改 getItems / 商品表 / 面板重建），只保留玩法 Mod
+    return;
 }
 
 @interface RMRuntimeTicker : NSObject
