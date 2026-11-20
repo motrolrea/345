@@ -1450,8 +1450,6 @@ static int gLockBtnVis = -1;
 static int gAutoBtnSeen = -1;
 static int gLockBtnSeen = -1;
 
-static void rm_sync_mod_buttons(void);
-
 static BOOL rm_is_mod_button(void *o) {
     return o && gModBtnClass && il2cpp_object_get_class((Il2CppObject *)o) == gModBtnClass;
 }
@@ -1579,20 +1577,17 @@ static BOOL rm_states_look_valid(void *states) {
     return YES;
 }
 
-static void rm_install_button_icons(void *btn, int kind) {
-    if (!rm_is_mod_button(btn)) return;
-    void *states = *(void **)((char *)btn + 0x68);
-    if (!rm_states_look_valid(states)) return;
-    int n = (int)rm_array_count(states);
-    if (n > 4) n = 4;
-    Il2CppObject *on = rm_make_mod_sprite(kind, YES);
-    Il2CppObject *off = rm_make_mod_sprite(kind, NO);
-    if (!on && !off) return;
-    void **elems = (void **)((char *)states + kOff_Array_Elements);
-    for (int i = 0; i < n; i++) {
-        Il2CppObject *spr = (i == 0) ? (off ? off : on) : on;
-        if (spr) elems[i] = spr;
-    }
+// 直接把自定义图标设到按钮的 Image.sprite 上（不碰 states[] 数组、不碰 State/颜色，
+// 避免和官方 Click() 的数据流打架）
+static BOOL rm_install_button_icon(void *btn, int kind) {
+    if (!rm_is_mod_button(btn)) return NO;
+    void *img = *(void **)((char *)btn + 0x30);
+    if (!img) return NO;
+    if (gUIImageClass && il2cpp_object_get_class((Il2CppObject *)img) != gUIImageClass) return NO;
+    Il2CppObject *spr = rm_make_mod_sprite(kind, YES);
+    if (!spr) return NO;
+    rm_set_image_sprite(btn, spr);
+    return YES;
 }
 
 // 官方解锁动画用的那张图片（0x40）只在 Unlock() 里显示；这里把它的顶点色改成全透明，
@@ -1613,157 +1608,36 @@ static void rm_hide_unlock_overlay(void *btn) {
     rm_image_set_color(img, 1.0f, 1.0f, 1.0f, 0.0f);
 }
 
-static BOOL rm_hint_text_valid(void *mods) {
-    if (!rm_is_mods(mods) || !gTscClass) return NO;
-    void *tsc = *(void **)((char *)mods + 0x98);
-    return tsc && il2cpp_object_get_class((Il2CppObject *)tsc) == gTscClass;
-}
-
-// 把 ModsControl 里那条滚动说明文字换成我们自己的
-static void rm_set_hint_text(void *mods, NSString *text) {
-    if (!rm_hint_text_valid(mods) || !text.length || !il2cpp_string_new) return;
-    void *tsc = *(void **)((char *)mods + 0x98);   // ModsControl.modHintText
-    Il2CppClass *k = il2cpp_object_get_class((Il2CppObject *)tsc);
-    const MethodInfo *m = k ? il2cpp_class_get_method_from_name(k, "set_Text", 1) : NULL;
-    if (!m) m = il2cpp_class_get_method_from_name(k, "set_text", 1);
-    if (!m) return;
-    Il2CppString *s = il2cpp_string_new(text.UTF8String);
-    if (!s) return;
-    void *args[1] = {s};
-    Il2CppException *e = NULL;
-    il2cpp_runtime_invoke(m, tsc, args, &e);
-}
-
-static void rm_play_official_hint(void *mods, int modIndex, NSString *text) {
-    if (!rm_is_mods(mods)) return;
-    if (!rm_hint_text_valid(mods)) {
-        static BOOL logged = NO;
-        if (!logged) { logged = YES; RMLog(@"Mods 提示: modHintText 无效，跳过长按说明"); }
-        return;
-    }
-    const MethodInfo *m = il2cpp_class_get_method_from_name(gModsClass, "HideAndShowHint", 1);
-    if (m) {
-        int32_t idx = modIndex;
-        void *args[1] = {&idx};
-        Il2CppException *e = NULL;
-        il2cpp_runtime_invoke(m, mods, args, &e);
-    }
-    rm_set_hint_text(mods, text);   // 官方刚写入的文案替换成我们的
-}
-
-static void rm_tap_autoplay(void *self, int32_t state) {
-    (void)self;
-    (void)state;
-    RMAutoPlay = !RMAutoPlay;
-    [NSUserDefaults.standardUserDefaults setBool:RMAutoPlay forKey:@"rm.auto"];
-    RMLog(@"Mods 栏点击: 自动游玩 → %@", RMAutoPlay ? @"开" : @"关");
-    gAutoBtnVis = -1;
-    gAutoBtnSeen = RMAutoPlay ? 1 : 0;
-    rm_sync_mod_buttons();
-    RMApplySettingsNow();
-}
-
-static void rm_tap_lockhp(void *self, int32_t state) {
-    (void)self;
-    (void)state;
-    RMLockHP = !RMLockHP;
-    [NSUserDefaults.standardUserDefaults setBool:RMLockHP forKey:@"rm.hp"];
-    RMLog(@"Mods 栏点击: 锁血 → %@", RMLockHP ? @"开" : @"关");
-    gLockBtnVis = -1;
-    gLockBtnSeen = RMLockHP ? 1 : 0;
-    rm_sync_mod_buttons();
-    RMApplySettingsNow();
-}
-
-// 原地替换点击委托（Click() 里跳的是 delegate->method_code，即 0x40）
-static void rm_patch_click(void *btn, void *fn) {
-    if (!rm_is_mod_button(btn)) return;
-    Il2CppObject *d = (Il2CppObject *)*(void **)((char *)btn + 0xA8);
-    if (!d) return;
-    if (*(void **)((char *)d + 0x40) == fn) return;
-    *(void **)((char *)d + 0x40) = fn;
-    *(void **)((char *)d + 0x10) = fn;
-}
-
-static BOOL rm_click_bound(void *btn, void *fn) {
-    if (!rm_is_mod_button(btn)) return NO;
-    Il2CppObject *d = (Il2CppObject *)*(void **)((char *)btn + 0xA8);
-    if (!d) return NO;
-    return *(void **)((char *)d + 0x40) == fn;
-}
-
-// 长按：官方 Update() 会传 modIndex-1
-//   实际配置：demoModButton modIndex=6 → 自动游玩；hideModButton modIndex=5 → 锁血
-static void rm_long_mod(void *self, int32_t idx) {
-    int modIndex = idx + 1;
-    // 用委托自己的 m_target 作为 ModsControl，比依赖传入寄存器安全
-    void *target = gLongDelegate ? *(void **)((char *)gLongDelegate + 0x20) : self;
-    if (modIndex == 6 || modIndex == 5) {
-        void *mods = rm_is_mods(target) ? target : gInstalledMods;
-        if (modIndex == 6) {
-            rm_play_official_hint(mods, modIndex,
-                                  @"自动游玩：自动击打全部音符，正常结算成绩。官方「自动演示」不计成绩。");
-        } else {
-            rm_play_official_hint(mods, modIndex,
-                                  @"锁血：游玩中生命值锁定为满，Miss / Bad 不会掉血，也不会中途失败。");
+// 只读监听：玩家在官方 Mods 栏点了这两个按钮时，官方 Click() 会改 State(0x88)。
+// 我们不再替换任何委托、不写 State/颜色，避免干扰官方点击链路。
+static void rm_watch_mod_buttons(void) {
+    if (rm_is_mod_button(gAutoPlayBtn)) {
+        int st = *(int *)((char *)gAutoPlayBtn + 0x88);
+        if (gAutoBtnSeen < 0) gAutoBtnSeen = st;
+        else if (st != gAutoBtnSeen) {
+            gAutoBtnSeen = st;
+            BOOL on = st != 0;
+            if (on != RMAutoPlay) {
+                RMAutoPlay = on;
+                [NSUserDefaults.standardUserDefaults setBool:on forKey:@"rm.auto"];
+                RMLog(@"Mods 栏点击: 自动游玩 → %@", on ? @"开" : @"关");
+                RMApplySettingsNow();
+            }
         }
-        return;
     }
-    if (gOrigLongFn) ((void (*)(void *, int32_t))gOrigLongFn)(target, idx);
-}
-
-// 原地替换长按委托的执行入口（不新建对象，避免托管堆问题）
-static void rm_patch_long_press(void *btn) {
-    if (!rm_is_mod_button(btn)) return;
-    Il2CppObject *d = (Il2CppObject *)*(void **)((char *)btn + 0xB0);
-    if (!d) return;
-    void *cur = *(void **)((char *)d + 0x40);   // method_code
-    if (cur == (void *)rm_long_mod) return;
-    if (!gOrigLongFn) gOrigLongFn = cur;
-    gLongDelegate = d;
-    *(void **)((char *)d + 0x40) = (void *)rm_long_mod;
-    *(void **)((char *)d + 0x10) = (void *)rm_long_mod;
-}
-
-static void rm_apply_button_visual(void *btn, BOOL on, BOOL paint) {
-    if (!rm_is_mod_button(btn)) return;
-    void *states = *(void **)((char *)btn + 0x68);
-    if (!rm_states_look_valid(states)) return;
-    int n = (int)rm_array_count(states);
-    // 有些按钮只有 1 个状态图，这时不能把 State 写成 1（官方 Click 会越界抛异常）
-    int idx = (on && n > 1) ? 1 : 0;
-    *(int *)((char *)btn + 0x88) = idx;
-    if (!paint) return;
-    void *img = *(void **)((char *)btn + 0x30);
-    if (!img) return;
-    if (gUIImageClass && il2cpp_object_get_class((Il2CppObject *)img) != gUIImageClass) return;
-    void *colors = *(void **)((char *)btn + 0x78);
-    int cn = colors ? (int)rm_array_count(colors) : 0;
-    if (cn > 0 && cn < 32) {
-        int ci = idx < cn ? idx : cn - 1;
-        float *c = (float *)((char *)colors + kOff_Array_Elements + (size_t)ci * 16);
-        rm_image_set_color(img, c[0], c[1], c[2], c[3]);
-    }
-    if (idx < n) {
-        Il2CppObject *spr = ((Il2CppObject **)((char *)states + kOff_Array_Elements))[idx];
-        if (spr) rm_set_image_sprite(btn, spr);
-    }
-}
-
-static BOOL rm_mods_panel_open(void) {
-    if (!rm_is_mods(gInstalledMods)) return NO;
-    return *(uint8_t *)((char *)gInstalledMods + 0xD4) != 0;   // hasExpanded
-}
-
-static void rm_sync_mod_buttons(void) {
-    BOOL open = rm_mods_panel_open();
-    if (gAutoPlayBtn && (int)RMAutoPlay != gAutoBtnVis) {
-        gAutoBtnVis = RMAutoPlay ? 1 : 0;
-        rm_apply_button_visual(gAutoPlayBtn, RMAutoPlay, open);
-    }
-    if (gLockHPBtn && (int)RMLockHP != gLockBtnVis) {
-        gLockBtnVis = RMLockHP ? 1 : 0;
-        rm_apply_button_visual(gLockHPBtn, RMLockHP, open);
+    if (rm_is_mod_button(gLockHPBtn)) {
+        int st = *(int *)((char *)gLockHPBtn + 0x88);
+        if (gLockBtnSeen < 0) gLockBtnSeen = st;
+        else if (st != gLockBtnSeen) {
+            gLockBtnSeen = st;
+            BOOL on = st != 0;
+            if (on != RMLockHP) {
+                RMLockHP = on;
+                [NSUserDefaults.standardUserDefaults setBool:on forKey:@"rm.hp"];
+                RMLog(@"Mods 栏点击: 锁血 → %@", on ? @"开" : @"关");
+                RMApplySettingsNow();
+            }
+        }
     }
 }
 
@@ -1819,14 +1693,11 @@ static void rm_install_on_mods(void *mods, BOOL active) {
 
     if (gIconsMods != mods) {
         rm_log_mods_layout(mods);
-        rm_install_button_icons(demo, 0);
-        rm_install_button_icons(hide, 1);
+        BOOL a = rm_install_button_icon(demo, 0);
+        BOOL b2 = rm_install_button_icon(hide, 1);
         gIconsMods = mods;
+        RMLog(@"Mods 图标: 写入 %d/%d（自动游玩/锁血）", a ? 1 : 0, b2 ? 1 : 0);
     }
-    rm_patch_click(demo, (void *)rm_tap_autoplay);
-    rm_patch_click(hide, (void *)rm_tap_lockhp);
-    rm_patch_long_press(demo);
-    rm_patch_long_press(hide);
 
     if (!active) return;
     gAutoPlayBtn = demo;
@@ -1837,18 +1708,10 @@ static void rm_install_on_mods(void *mods, BOOL active) {
         gLockBtnVis = -1;
         gAutoBtnSeen = -1;
         gLockBtnSeen = -1;
-        RMLog(@"Mods 栏接管: 自动演示→自动游玩，隐藏计量条→锁血（modIndex %d/%d 锁定 %d/%d 状态 %d/%d）",
+        RMLog(@"Mods 栏接管: 自动演示→自动游玩，隐藏计量条→锁血（modIndex %d/%d 锁定 %d/%d）",
               *(int *)((char *)demo + 0x70), *(int *)((char *)hide + 0x70),
-              *(uint8_t *)((char *)demo + 0x98), *(uint8_t *)((char *)hide + 0x98),
-              *(int *)((char *)demo + 0x88), *(int *)((char *)hide + 0x88));
-        RMLog(@"Mods 图标: states %d/%d, sprite类=%p, 生成=%d, 点击绑定=%d/%d",
-              (int)rm_array_count(*(void **)((char *)demo + 0x68)),
-              (int)rm_array_count(*(void **)((char *)hide + 0x68)),
-              gSpriteClass, gIconsMods == mods,
-              rm_click_bound(demo, (void *)rm_tap_autoplay) ? 1 : 0,
-              rm_click_bound(hide, (void *)rm_tap_lockhp) ? 1 : 0);
+              *(uint8_t *)((char *)demo + 0x98), *(uint8_t *)((char *)hide + 0x98));
     }
-    rm_sync_mod_buttons();
 }
 
 static void rm_install_mod_replacements(void) {
@@ -1880,7 +1743,6 @@ static void rm_install_mod_replacements(void) {
 // 对外接口
 // ---------------------------------------------------------------------------
 void RMApplySettingsNow(void) {
-    rm_sync_mod_buttons();
     if (!RMIl2CppReady || !RMGameReady) return;
     rm_apply_mods();
     if (RMUnlockAllSongs) rm_apply_unlock();
@@ -1932,8 +1794,8 @@ static void rm_runtime_tick(void) {
         rm_watch_play_gate();
         if (!RMInLevel) {
             rm_install_mod_replacements();
-            rm_sync_mod_buttons();
-        }
+            rm_watch_mod_buttons();
+                }
     }
 
     static CFTimeInterval lastBeat = 0;
